@@ -98,7 +98,7 @@ export function ClipsPage() {
                   className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-400 ${
                     active
                       ? 'border-brand-500/60 bg-brand-500/10 text-primary'
-                      : 'border-line-strong bg-ink-900 text-secondary hover:border-white/20'
+                      : 'border-line-strong bg-ink-900 text-secondary hover:border-line-hover'
                   }`}
                 >
                   {item.label}

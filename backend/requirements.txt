@@ -3,8 +3,8 @@
 # Install with:
 #   pip install -r backend/requirements.txt
 #
-# faster-whisper pulls ctranslate2 + tokenizers. On Windows the CUDA build of
-# ctranslate2 is NOT bundled; CPU works out of the box. For GPU use see
+# Every pin below is the version the test suite and a real end-to-end render
+# were verified against. Full notes, the dependency matrix and GPU setup are in
 # backend/README.md.
 
 fastapi==0.115.6
@@ -14,23 +14,71 @@ pydantic==2.10.4
 pydantic-settings==2.7.0
 SQLAlchemy==2.0.36
 
-# Transcription. Word-level timestamps are required for karaoke captions.
-# 1.2.1 is the verified version: it returns word timings on CPU and its bundled
-# ctranslate2 4.8.2 has a Windows CPU wheel.
+# --- Transcription ---------------------------------------------------------
+#
+# Word-level timestamps are required for karaoke captions, and faster-whisper
+# only returns them when word_timestamps=True is passed to transcribe().
 #
 # NOTE: do not "simplify" the audio loading in app/pipeline/transcribe.py back
-# to faster_whisper.audio.decode_audio. That helper calls av.open(...,
-# metadata_errors="ignore"), and PyAV >= 14 removed the argument, so it raises
-# TypeError against any current PyAV. The local loader shells out to ffmpeg and
-# reads 16 kHz mono PCM with the stdlib instead.
+# to faster_whisper.audio.decode_audio. Verified failure against this pin:
+#
+#   >>> av.open(path, mode="r", metadata_errors="ignore")
+#   TypeError: open() got an unexpected keyword argument 'metadata_errors'
+#
+# decode_audio hardcodes that keyword, and PyAV removed it in v14. The local
+# loader shells out to ffmpeg and reads 16 kHz mono PCM with the stdlib `wave`
+# module instead, so the only audio dependency is an ffmpeg binary the pipeline
+# already requires.
 faster-whisper==1.2.1
-numpy>=1.26
 
-# Optional LLM ranking. Both are importable without an API key set; the
-# pipeline falls back to pure heuristic scoring when neither key is present.
+# Pulled in transitively by faster-whisper and imported by it at module scope,
+# so it cannot be treated as optional. Pinned explicitly for two reasons:
+#
+#   1. `av` is the package that dropped `metadata_errors` (see above). Leaving
+#      it unpinned means the incompatible combination can reappear silently on
+#      a fresh install, and the local loader's necessity becomes invisible.
+#   2. On Windows the CUDA build of ctranslate2 is not bundled. 4.8.2 is the
+#      verified version that ships a working CPU wheel; a newer resolution can
+#      fail to install with no obvious cause.
+#
+# Verified CPU compute types for this ctranslate2: int8_float32, int8, float32.
+av==19.0.1
+ctranslate2==4.8.2
+tokenizers==0.22.1
+
+# numpy is a direct import in app/pipeline/transcribe.py, and ctranslate2
+# requires it too. Bounded rather than pinned: 2.4.0 is the verified version,
+# while an upper bound keeps a numpy 3.x release from breaking ctranslate2
+# 4.8.2, which predates it.
+#
+# Note: `pip check` may report `numba ... requires numpy<2.4`. That comes from
+# datashader, which is unrelated to this project, and does not affect the
+# backend. See backend/README.md.
+numpy>=1.26,<2.5
+
+# --- Optional GPU ----------------------------------------------------------
+#
+# Not a hard requirement. app/pipeline/transcribe.py::resolve_device imports
+# torch inside a try/except to probe for CUDA; with torch absent it returns
+# "cpu" and the pipeline runs normally on CPU.
+#
+# torch is listed commented-out rather than pinned because it is a ~2.5GB
+# install and there is no CUDA wheel for Windows. On Linux, or on Windows with
+# an NVIDIA GPU, install the build matching your driver:
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+# On Windows, CUDA support requires a CUDA-enabled ctranslate2 build, which is
+# not distributed through PyPI. CPU is the supported Windows path.
+# torch==2.9.1
+
+# --- Optional LLM ranking --------------------------------------------------
+#
+# Both are imported lazily inside app/pipeline/rank.py and are absent-safe: with
+# no API key the pipeline falls back to pure heuristic scoring.
 anthropic==0.42.0
 openai==1.59.6
 
-# Test client.
+# --- Tests -----------------------------------------------------------------
 pytest==8.3.4
 httpx==0.28.1

@@ -50,7 +50,7 @@ export function VideoDropzone({ onFiles, errors = [], disabled = false, compact 
             ? 'border-brand-500 bg-brand-500/[0.07]'
             : errors.length > 0
               ? 'border-danger/40 bg-danger/[0.04]'
-              : 'border-line-strong bg-ink-900/40 hover:border-white/25 hover:bg-ink-900/70'
+              : 'border-line-strong bg-ink-900/40 hover:border-line-hover hover:bg-ink-900/70'
         } ${disabled ? 'pointer-events-none opacity-50' : ''}`}
       >
         <input
@@ -108,7 +108,7 @@ export function VideoDropzone({ onFiles, errors = [], disabled = false, compact 
           {errors.map((message) => (
             <li
               key={message}
-              className="flex items-start gap-2 rounded-lg border border-danger/25 bg-danger/[0.07] px-3 py-2 text-[12.5px] leading-relaxed text-red-300"
+              className="flex items-start gap-2 rounded-lg border border-danger/25 bg-danger/[0.07] px-3 py-2 text-[12.5px] leading-relaxed text-danger"
             >
               <AlertCircle aria-hidden className="mt-px size-3.5 shrink-0" />
               <span>{message}</span>

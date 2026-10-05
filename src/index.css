@@ -41,6 +41,16 @@
   /* --- Hairlines ------------------------------------------------------- */
   --color-line: rgba(255, 255, 255, 0.07);
   --color-line-strong: rgba(255, 255, 255, 0.13);
+  /* Border colour for hover states. A literal `white/20` is invisible on a light
+     surface, so this has to be a token rather than a hardcoded alpha. */
+  --color-line-hover: rgba(255, 255, 255, 0.22);
+
+  /* Always-dark scrim for chrome laid over video (badges, checkboxes, playhead).
+     Deliberately theme-invariant: it sits on picture, not on the page. */
+  --color-scrim: #07070c;
+
+  /* Grid ruling behind hero / empty states. */
+  --color-grid-line: rgba(255, 255, 255, 0.035);
 
   /* --- Typography ------------------------------------------------------ */
   --font-sans:
@@ -121,6 +131,66 @@
       transform: translateY(0);
     }
   }
+}
+
+/* ==========================================================================
+   Light theme
+   --------------------------------------------------------------------------
+   Tailwind v4 emits the `@theme` variables into `@layer theme`, so a plain
+   `@layer base` block would lose the cascade to them. This override is
+   deliberately unlayered: unlayered rules beat layered ones regardless of
+   specificity, which is what makes the swap actually take effect.
+
+   Only tokens that must differ are redefined. The ink ramp keeps its
+   ordering — higher number is still the more recessed surface — so every
+   `bg-ink-950` / `bg-ink-850` / `bg-ink-750` usage keeps working and simply
+   resolves to a light value. `--color-scrim` is intentionally absent: it is
+   chrome over video and stays dark in both themes.
+   ========================================================================== */
+[data-theme='light'] {
+  /* Surfaces: near-white page, white panels, grey wells. */
+  --color-ink-950: #f5f5f8;
+  --color-ink-925: #ececf1;
+  --color-ink-900: #ffffff;
+  --color-ink-850: #ffffff;
+  --color-ink-800: #fafafd;
+  --color-ink-750: #eeeef3;
+  --color-ink-700: #e2e2ea;
+  --color-ink-600: #d0d0dc;
+  --color-ink-500: #b4b4c4;
+
+  /* Accent: darken the brand ramp so it passes contrast on white. */
+  --color-brand-200: #4c1d95;
+  --color-brand-300: #5b21b6;
+  --color-brand-400: #6d28d9;
+  --color-brand-500: #7c3aed;
+  --color-brand-600: #6d28d9;
+  --color-brand-700: #5b21b6;
+  --color-brand-800: #4c1d95;
+
+  /* Semantic: the dark-theme tints are too pale to read on white. */
+  --color-success: #067a4e;
+  --color-warning: #a45b06;
+  --color-danger: #cc2b2b;
+  --color-info: #1d63d1;
+
+  /* Text */
+  --color-primary: #14141c;
+  --color-secondary: #55556a;
+  --color-faint: #82829a;
+
+  /* Hairlines */
+  --color-line: rgba(15, 15, 25, 0.09);
+  --color-line-strong: rgba(15, 15, 25, 0.17);
+  --color-line-hover: rgba(15, 15, 25, 0.3);
+
+  /* Grid ruling behind hero / empty states. */
+  --color-grid-line: rgba(15, 15, 25, 0.045);
+
+  /* Shadows: light UI needs a tighter, less opaque lift than dark. */
+  --shadow-panel: 0 1px 2px rgba(15, 15, 25, 0.05), 0 8px 24px -14px rgba(15, 15, 25, 0.16);
+  --shadow-raised: 0 1px 2px rgba(15, 15, 25, 0.07), 0 16px 40px -18px rgba(15, 15, 25, 0.22);
+  --shadow-glow: 0 0 0 1px rgba(109, 40, 217, 0.2), 0 8px 32px -10px rgba(109, 40, 217, 0.28);
 }
 
 /* ==========================================================================
@@ -283,7 +353,7 @@
 
   /* Clipboard-safe gradient headline treatment. */
   .gradient-text {
-    background-image: linear-gradient(120deg, #ffffff 8%, var(--color-brand-300) 58%, var(--color-brand-500));
+    background-image: linear-gradient(120deg, var(--color-primary) 8%, var(--color-brand-400) 58%, var(--color-brand-500));
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -297,8 +367,8 @@
   /* Faint grid used behind hero / empty states. */
   .bg-grid {
     background-image:
-      linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      linear-gradient(to right, var(--color-grid-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--color-grid-line) 1px, transparent 1px);
     background-size: 56px 56px;
   }
 
@@ -319,6 +389,10 @@
 
 /* ==========================================================================
    Motion preferences
+   --------------------------------------------------------------------------
+   `.reduce-motion` is set by `App.jsx` from the Settings toggle. Both this
+   class and the OS-level query collapse the same declarations, so the toggle
+   works even when the OS reports no preference.
    ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -329,4 +403,13 @@
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
 }

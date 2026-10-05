@@ -291,9 +291,25 @@ def run_processing(
         # Map transcript completion onto 0..1 of the stage.
         base = tracker.progress
 
+        reported = [0.0]
+
         def on_transcribed(fraction: float) -> None:
-            tracker.advance("transcript", fraction)
+            frac = fraction
+            if frac <= 0.0:
+                frac = min(0.05, reported[0] + 0.002)
+            if frac < reported[0]:
+                frac = reported[0]
+            if frac > 0.98:
+                frac = 0.98
+            reported[0] = frac
+            tracker.advance("transcript", frac)
             context.report("transcript", tracker.progress)
+
+        # Initial heartbeat to show activity during model load
+        try:
+            on_transcribed(0.02)
+        except Exception:
+            pass
 
         segments, meta = transcribe(
             temp_audio,

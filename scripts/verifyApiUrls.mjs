@@ -63,11 +63,19 @@ for (const config of CONFIGS) {
     `${config.label}: prefixed path`
   );
 
-  // Backend media path.
+  // `project.objectUrl` is `/media/{id}`: mounted OUTSIDE the API prefix, so
+  // prefixing it would 404 and the `<video src>` would never load.
   expectEqual(
-    resolveUrl('/api/v1/media/prj_1', { base, prefix }),
-    `${base}/api/v1/media/prj_1`,
-    `${config.label}: media path`
+    resolveUrl('/media/prj_1', { base, prefix }),
+    `${base}/media/prj_1`,
+    `${config.label}: source media path`
+  );
+
+  // Rendered clip stream: already-prefixed, no token, range-requested.
+  expectEqual(
+    resolveUrl('/api/v1/exports/exp_1/stream', { base, prefix }),
+    `${base}/api/v1/exports/exp_1/stream`,
+    `${config.label}: export stream path`
   );
 
   // Tokenised download link.
@@ -93,12 +101,22 @@ for (const config of CONFIGS) {
 
 /* --- The regression this file exists for ---------------------------------- */
 
-const doubled = resolveUrl('/api/v1/media/prj_1', {
+const doubled = resolveUrl('/api/v1/exports/exp_1/stream', {
   base: splitBaseUrl('http://localhost:8000/api/v1'),
   prefix: '/api/v1',
 });
 if (doubled.includes('/api/v1/api/v1')) {
   failures.push(`double-prefix regression: ${doubled}`);
+}
+
+// The mirror-image failure: prefixing a server-rooted path that is deliberately
+// mounted outside the API prefix. This is the uploaded source video's URL.
+const overPrefixedMedia = resolveUrl('/media/prj_1', {
+  base: splitBaseUrl('http://localhost:8000/api/v1'),
+  prefix: '/api/v1',
+});
+if (overPrefixedMedia.includes('/api/v1/media/')) {
+  failures.push(`server-rooted media path was given the API prefix: ${overPrefixedMedia}`);
 }
 
 if (failures.length > 0) {

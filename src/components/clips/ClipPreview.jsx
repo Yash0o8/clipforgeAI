@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Captions, Film, Pause, Play } from 'lucide-react';
 import { CAPTION_PRESET_MAP } from '../../utils/constants.js';
 import { formatClock } from '../../utils/formatDuration.js';
@@ -187,12 +187,15 @@ function CaptionOverlay({ clip, preset, captionText, currentTime, frameWidth }) 
  * @param {string} [props.variant]          'player' | 'poster'
  * @param {number} [props.currentTime]      Playhead, seconds.
  * @param {boolean} [props.isPlaying]
- * @param {(playing: boolean) => void} [props.onTogglePlay]
+ * @param {() => void} [props.onTogglePlay]            Transport button.
+ * @param {(playing: boolean) => void} [props.onPlayingChange]  Reports real playback state.
  * @param {(seconds: number) => void} [props.onTimeUpdate]  Reports the playhead.
  * @param {number} [props.seekTo]         Seek target; applied when it changes.
  * @param {object} [props.preset]         Caption preset from constants.
  * @param {string} [props.captionText]
  * @param {boolean} [props.showCaptions]
+ * @param {boolean} [props.autoPlay]   Start muted playback on mount.
+ * @param {number} [props.timeBase]   Media-time offset of the loaded file.
  */
 export function ClipPreview({
   clip,
@@ -201,11 +204,14 @@ export function ClipPreview({
   currentTime = 0,
   isPlaying = false,
   onTogglePlay,
+  onPlayingChange,
   onTimeUpdate,
   seekTo,
   preset,
   captionText,
   showCaptions = true,
+  autoPlay = false,
+  timeBase = 0,
   className = '',
 }) {
   const containerRef = useRef(null);
@@ -220,14 +226,31 @@ export function ClipPreview({
 
   const hasSource = Boolean(sourceUrl) && variant === 'player';
 
+  /*
+   * Media time vs. clip time.
+   *
+   * `clip.startSec`/`endSec` are positions in the *original* upload, so the
+   * source media's clock and the clip's clock only agree when the whole upload
+   * is loaded. A rendered file is already trimmed, so its timeline starts at 0
+   * and every seek past the first second would fall off the end of the file.
+   *
+   * `timeBase` is that offset: 0 for the source upload, `clip.startSec` for a
+   * render. Media time is clip time minus the base, and reports are converted
+   * back so the transport, transcript and caption overlay keep sharing one
+   * clock in source coordinates.
+   */
+  const windowStart = (clip?.startSec ?? 0) - timeBase;
+  const windowEnd = (clip?.endSec ?? 0) - timeBase;
+  const toMediaTime = useCallback((seconds) => seconds - timeBase, [timeBase]);
+
   /* --- Sync the element to the clip window and play/pause state ---------- */
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !hasSource || !clip) return;
 
-    // Keep playback inside [startSec, endSec].
-    if (video.currentTime < clip.startSec || video.currentTime > clip.endSec) {
-      video.currentTime = clip.startSec;
+    // Keep playback inside the clip's window, in this file's own time.
+    if (video.currentTime < windowStart || video.currentTime > windowEnd) {
+      video.currentTime = Math.max(0, windowStart);
     }
 
     if (isPlaying) {
@@ -236,14 +259,27 @@ export function ClipPreview({
     } else {
       video.pause();
     }
-  }, [hasSource, isPlaying, clip]);
+  }, [hasSource, isPlaying, clip, windowStart, windowEnd]);
 
   /* --- External seek, driven by the timeline scrubber -------------------- */
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !hasSource || seekTo == null) return;
-    video.currentTime = Math.max(clip?.startSec ?? 0, seekTo);
-  }, [seekTo, hasSource, clip?.startSec]);
+    video.currentTime = Math.max(0, toMediaTime(seekTo));
+  }, [seekTo, hasSource, clip?.startSec, toMediaTime]);
+
+  /* --- Autoplay on open --------------------------------------------------- */
+  // The ref guards against re-announcing on every clip change: this is a
+  // once-per-mount preference, not a reaction to props. Playback is muted, so
+  // browsers allow it without a gesture.
+  const autoplayedRef = useRef(false);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !hasSource || !autoPlay || autoplayedRef.current) return;
+    autoplayedRef.current = true;
+    video.currentTime = Math.max(0, windowStart);
+    video.play().then(() => onPlayingChange?.(true)).catch(() => {});
+  }, [hasSource, autoPlay, windowStart, onPlayingChange]);
 
   // Loop back to the clip start when the end is reached, and report the playhead.
   useEffect(() => {
@@ -252,14 +288,14 @@ export function ClipPreview({
 
     // Named distinctly from the `onTimeUpdate` prop to avoid self-recursion.
     const handleTimeUpdate = () => {
-      if (video.currentTime >= clip.endSec) {
-        video.currentTime = clip.startSec;
+      if (video.currentTime >= windowEnd) {
+        video.currentTime = Math.max(0, windowStart);
       }
-      onTimeUpdate?.(video.currentTime);
+      onTimeUpdate?.(video.currentTime + timeBase);
     };
     video.addEventListener('timeupdate', handleTimeUpdate);
     return () => video.removeEventListener('timeupdate', handleTimeUpdate);
-  }, [hasSource, clip, onTimeUpdate]);
+  }, [hasSource, clip, onTimeUpdate, windowStart, windowEnd, timeBase]);
 
   const sublabel =
     variant === 'poster'
@@ -304,7 +340,7 @@ export function ClipPreview({
 
           {/* Duration chip, bottom-left. */}
           {clip?.durationSec > 0 && (
-            <span className="tabular absolute bottom-2 left-2 rounded bg-ink-950/80 px-1.5 py-0.5 text-[10.5px] font-medium text-white backdrop-blur-sm">
+            <span className="tabular absolute bottom-2 left-2 rounded bg-scrim/80 px-1.5 py-0.5 text-[10.5px] font-medium text-white backdrop-blur-sm">
               {formatClock(clip.durationSec)}
             </span>
           )}
@@ -317,12 +353,12 @@ export function ClipPreview({
               className="absolute inset-0 flex items-center justify-center focus-visible:outline-2 focus-visible:outline-brand-400"
             >
               {!isPlaying && (
-                <span className="flex size-12 items-center justify-center rounded-full bg-ink-950/60 text-white backdrop-blur-sm transition-transform hover:scale-105">
+                <span className="flex size-12 items-center justify-center rounded-full bg-scrim/60 text-white backdrop-blur-sm transition-transform hover:scale-105">
                   <Play aria-hidden className="size-5 translate-x-0.5 fill-current" />
                 </span>
               )}
               {isPlaying && (
-                <span className="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-full bg-ink-950/60 text-white backdrop-blur-sm">
+                <span className="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-full bg-scrim/60 text-white backdrop-blur-sm">
                   <Pause aria-hidden className="size-3.5 fill-current" />
                 </span>
               )}

@@ -12,7 +12,7 @@ export function LandingPage() {
       {/* Hero */}
       <section className="mx-auto flex max-w-6xl flex-col items-center gap-8 px-4 pb-14 pt-10 text-center sm:px-6 sm:pt-14 lg:px-8">
         <Badge tone="brand" size="sm" dot>
-          Local-first demo
+          Self-hosted, runs locally
         </Badge>
         <div className="space-y-4">
           <h1 className="text-3xl font-semibold tracking-tight text-primary sm:text-4xl lg:text-5xl">
@@ -29,7 +29,7 @@ export function LandingPage() {
             Upload a video
           </Button>
           <Button as={Link} to="/app/overview" size="lg" variant="secondary">
-            View demo dashboard
+            Go to dashboard
           </Button>
         </div>
       </section>
@@ -67,7 +67,7 @@ export function LandingPage() {
             <PanelHeader title="1. Upload" />
             <PanelBody>
               <p className="text-[13px] leading-relaxed text-secondary">
-                Drop an MP4, WebM or MOV. A local demo source is used if nothing is uploaded.
+                Drop an MP4, WebM or MOV. Uploads are chunked, so large files survive a flaky connection.
               </p>
             </PanelBody>
           </Panel>
@@ -75,7 +75,7 @@ export function LandingPage() {
             <PanelHeader title="2. Process" />
             <PanelBody>
               <p className="text-[13px] leading-relaxed text-secondary">
-                Transcribe, score and detect highlights. The simulated pipeline shows the stages.
+                Transcribe, score and detect highlights. Progress is reported stage by stage as it runs.
               </p>
             </PanelBody>
           </Panel>
@@ -83,7 +83,7 @@ export function LandingPage() {
             <PanelHeader title="3. Edit & export" />
             <PanelBody>
               <p className="text-[13px] leading-relaxed text-secondary">
-                Trim, style captions, re-aspect and download SRT, TXT or JSON. MP4 needs a backend.
+                Trim, style captions, re-aspect and export MP4, or download SRT, TXT or JSON sidecars.
               </p>
             </PanelBody>
           </Panel>

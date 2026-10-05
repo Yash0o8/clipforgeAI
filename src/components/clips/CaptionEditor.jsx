@@ -113,7 +113,7 @@ export function CaptionEditor({
                 className={`flex flex-col gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-400 ${
                   selected
                     ? 'border-brand-500/60 bg-brand-500/[0.08]'
-                    : 'border-line-strong bg-ink-900 hover:border-white/20'
+                    : 'border-line-strong bg-ink-900 hover:border-line-hover'
                 }`}
               >
                 <PresetSwatch style={item.style} />

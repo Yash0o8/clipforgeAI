@@ -117,7 +117,15 @@ export function useProcessing(projectId) {
 
     try {
       for (;;) {
-        const fresh = await projectService.getProject(projectId, { signal });
+        let fresh;
+        try {
+          fresh = await projectService.getProject(projectId, { signal, timeout: 180000 });
+        } catch {
+          if (signal.aborted) return;
+          // Transient poll failure; retry without surfacing error immediately
+          await sleep(POLL_MS * 2, signal);
+          continue;
+        }
         replaceProject(fresh);
 
         setProgress(Number(fresh.progress ?? 0));
@@ -178,7 +186,7 @@ export function useProcessing(projectId) {
     startedAtRef.current = Date.now();
 
     try {
-      await projectService.processProject(projectId);
+      await projectService.processProject(projectId, { timeout: 120000 });
       await poll();
     } catch (err) {
       setError(err.message ?? 'Could not start processing.');
@@ -196,7 +204,7 @@ export function useProcessing(projectId) {
     setElapsedSec(0);
 
     try {
-      await projectService.cancelProjectJob(projectId);
+      await projectService.cancelProjectJob(projectId, { timeout: 60000 });
     } catch {
       // The job may have finished between the click and the request; the next
       // refresh settles it either way.

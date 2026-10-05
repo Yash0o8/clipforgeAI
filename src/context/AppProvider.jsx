@@ -30,6 +30,8 @@ const DEFAULT_SETTINGS = {
     notifyOnFailure: true,
     weeklyDigest: false,
     autoSaveEdits: true,
+    autoplayPreview: true,
+    showCaptionsDefault: true,
   },
   appearance: {
     accent: 'brand',

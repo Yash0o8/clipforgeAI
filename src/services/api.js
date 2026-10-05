@@ -9,7 +9,7 @@
 const ENV = import.meta.env ?? {};
 
 export const API_PREFIX = String(ENV.VITE_API_PREFIX ?? '/api/v1').replace(/\/+$/, '') || '/api/v1';
-export const API_TIMEOUT_MS = Number(ENV.VITE_API_TIMEOUT) || 30000;
+export const API_TIMEOUT_MS = Number(ENV.VITE_API_TIMEOUT) || 120000;
 
 const RAW_BASE_URL = String(ENV.VITE_API_BASE_URL ?? '').trim();
 
@@ -31,6 +31,15 @@ const splitBaseUrl = (raw) => {
 export const API_BASE_URL = splitBaseUrl(RAW_BASE_URL);
 
 export { splitBaseUrl };
+
+/**
+ * Paths the backend serves outside `API_PREFIX`.
+ *
+ * `app.include_router(media_router)` has no prefix, so `/media/...` is a
+ * server-rooted path. Prefixing it would 404, and `objectUrl` is exactly that
+ * shape.
+ */
+const SERVER_ROOTED = new Set(['media', 'health', 'docs', 'openapi.json', 'redoc']);
 
 /** True when the API lives on a different origin, so CORS applies. */
 export const IS_CROSS_ORIGIN = Boolean(API_BASE_URL) && !/^https?:\/\//i.test(location.origin ?? '');
@@ -58,6 +67,13 @@ export function resolveUrl(path, { base = API_BASE_URL, prefix = API_PREFIX } = 
 
   // Already-prefixed: point it at the API origin without adding the prefix again.
   if (bare && (clean === bare || clean.startsWith(`${bare}/`))) {
+    return `${base}/${clean}`;
+  }
+
+  // Rooted at the server, not at the API. `/media/{projectId}` is mounted
+  // outside `api_prefix` on purpose, so prefixing it yields a 404 — this is the
+  // URL on `<video src>` for the uploaded source.
+  if (SERVER_ROOTED.has(clean.split('/')[0])) {
     return `${base}/${clean}`;
   }
 

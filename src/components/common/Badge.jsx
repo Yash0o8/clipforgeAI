@@ -1,10 +1,10 @@
 const TONES = {
   neutral: 'bg-ink-750 text-secondary border-line-strong',
-  brand: 'bg-brand-500/12 text-brand-300 border-brand-500/25',
-  success: 'bg-success/12 text-emerald-300 border-success/25',
-  warning: 'bg-warning/12 text-amber-300 border-warning/25',
-  danger: 'bg-danger/12 text-red-300 border-danger/25',
-  info: 'bg-info/12 text-blue-300 border-info/25',
+  brand: 'bg-brand-500/12 text-brand-400 border-brand-500/25',
+  success: 'bg-success/12 text-success border-success/25',
+  warning: 'bg-warning/12 text-warning border-warning/25',
+  danger: 'bg-danger/12 text-danger border-danger/25',
+  info: 'bg-info/12 text-info border-info/25',
   outline: 'bg-transparent text-secondary border-line-strong',
 };
 
@@ -17,10 +17,10 @@ const SIZES = {
 const DOT_TONES = {
   neutral: 'bg-faint',
   brand: 'bg-brand-400',
-  success: 'bg-emerald-400',
-  warning: 'bg-amber-400',
-  danger: 'bg-red-400',
-  info: 'bg-blue-400',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+  info: 'bg-info',
   outline: 'bg-faint',
 };
 

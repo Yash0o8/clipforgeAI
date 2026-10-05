@@ -8,8 +8,6 @@
  *   POST  /clips/{id}/export            queue a render job
  *   GET   /exports/{jobId}              poll render progress
  *   POST  /exports/{jobId}/download     signed download URL
- *
- * Called only when VITE_DEMO_MODE=false.
  */
 
 import { get, post, patch } from './api.js';

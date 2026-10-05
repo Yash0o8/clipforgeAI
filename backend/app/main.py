@@ -4,7 +4,11 @@ Run with::
 
     uvicorn app.main:app --reload --port 8000
 
-from the ``backend/`` directory. Or via the shortcut in ``backend/run.ps1``.
+from the ``backend/`` directory. Or via the shortcut in ``backend/run.ps1``,
+which also checks that ffmpeg is present before starting.
+
+Full setup, the verified dependency matrix and GPU notes are in
+``backend/README.md``.
 
 The API is mounted at ``/api/v1`` to match ``VITE_API_BASE_URL`` in the
 frontend's ``.env.example``. ``/media`` is deliberately *outside* that prefix:
@@ -32,8 +36,8 @@ from .schemas import HealthResponse
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+  
+) 
 logger = logging.getLogger("clipforge")
 
 VERSION = "1.0.0"

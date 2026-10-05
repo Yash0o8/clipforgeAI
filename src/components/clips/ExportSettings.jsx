@@ -94,7 +94,7 @@ export function ExportSettings({
         </p>
 
         {!canExport && (
-          <p className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/[0.07] px-3 py-2.5 text-[11.5px] leading-relaxed text-amber-200">
+          <p className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/[0.07] px-3 py-2.5 text-[11.5px] leading-relaxed text-warning">
             <AlertTriangle aria-hidden className="mt-px size-3.5 shrink-0" />
             <span>
               This project is still processing. Exports unlock once highlight detection finishes.

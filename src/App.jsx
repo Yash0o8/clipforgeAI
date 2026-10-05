@@ -17,17 +17,24 @@ import { useApp } from './hooks/useApp.js';
 /**
  * Top-level router.
  *
- * The demo defaults to `/app/overview` after "Get started" so the user lands
+ * `/app` defaults to `/app/overview` after "Get started" so the user lands
  * directly in the working dashboard. All app routes live under `/app/*` to keep
  * the marketing landing at `/`.
  */
 function AppRoutes() {
   const { settings } = useApp();
 
-  // Sync the document with the user's theme preference.
+  // Sync the document with the user's theme preference. The `data-theme`
+  // attribute is what actually drives the palette (`index.css`); the `dark`
+  // class is kept for any component that keys off it.
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', settings.theme !== 'light');
+    const isLight = settings.theme === 'light';
+    document.documentElement.classList.toggle('dark', !isLight);
     document.documentElement.setAttribute('data-theme', settings.theme);
+
+    // Browser UI (address bar, notch) follows the page background.
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+    if (themeColor) themeColor.setAttribute('content', isLight ? '#f5f5f8' : '#07070c');
   }, [settings.theme]);
 
   // Respect prefers-reduced-motion at the root level.

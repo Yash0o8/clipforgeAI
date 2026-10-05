@@ -5,7 +5,6 @@ import { PlugZap, X } from 'lucide-react';
 import { Sidebar } from './Sidebar.jsx';
 import { Header } from './Header.jsx';
 import { MobileNavigation } from './MobileNavigation.jsx';
-import { ToastViewport } from '../common/Toast.jsx';
 import { IconButton } from '../common/Button.jsx';
 import { useApp } from '../../hooks/useApp.js';
 
@@ -107,15 +106,15 @@ export function AppLayout() {
 
           {loadError && (
             <div className="hairline-t flex items-center gap-2 border-t-0 bg-danger/[0.06] px-4 py-1.5 sm:px-6">
-              <PlugZap aria-hidden className="size-3.5 shrink-0 text-red-400" />
-              <p className="min-w-0 text-[11.5px] leading-snug text-red-200/90">
+              <PlugZap aria-hidden className="size-3.5 shrink-0 text-danger" />
+              <p className="min-w-0 text-[11.5px] leading-snug text-danger">
                 <span className="font-semibold">Cannot reach the ClipForge API.</span>{' '}
                 {loadError.message ?? 'Check that the backend is running, then reload.'}
               </p>
               <button
                 type="button"
                 onClick={() => refreshProjects().catch(() => {})}
-                className="ml-auto shrink-0 rounded-md px-2 py-0.5 text-[11.5px] font-medium text-red-200/90 underline underline-offset-2 hover:text-red-100"
+                className="ml-auto shrink-0 rounded-md px-2 py-0.5 text-[11.5px] font-medium text-danger underline underline-offset-2 hover:text-danger/80"
               >
                 Retry
               </button>
@@ -133,7 +132,6 @@ export function AppLayout() {
       </div>
 
       <MobileNavigation />
-      <ToastViewport />
     </div>
   );
 }

@@ -144,7 +144,7 @@ export function ClipTimeline({
           {Array.from({ length: 11 }, (_, index) => (
             <span
               key={index}
-              className={`w-px ${index % 5 === 0 ? 'bg-white/10' : 'bg-white/[0.05]'}`}
+              className={`w-px ${index % 5 === 0 ? 'bg-line-strong' : 'bg-line'}`}
             />
           ))}
         </div>

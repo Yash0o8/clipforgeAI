@@ -23,7 +23,7 @@ export async function listProjects({ status, signal } = {}) {
 
 /** @returns {Promise<object>} */
 export async function getProject(projectId, { signal } = {}) {
-  return get(`/projects/${projectId}`, { signal });
+  return get(`/projects/${projectId}`, { signal, timeout: 120000 });
 }
 
 /**

@@ -202,6 +202,16 @@ class ExportJob(Base):
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     def to_dict(self) -> dict:
+        from .config import get_settings  # local import to avoid circular
+
+        settings = get_settings()
+        # Inline streaming URL. Unlike the tokenised download link this is meant
+        # for `<video src>`: no token to attach, no Content-Disposition, and
+        # Range support so the player can seek.
+        stream_url = (
+            f"{settings.api_prefix}/exports/{self.id}/stream" if self.render_path else None
+        )
+
         return {
             "id": self.id,
             "clipId": self.clip_id,
@@ -220,6 +230,11 @@ class ExportJob(Base):
             "settings": json.loads(self.settings_json or "{}"),
             "sizeBytes": self.size_bytes,
             "hasDownload": self.render_path is not None,
+            "renderPath": self.render_path,
+            "url": stream_url,
+            "streamUrl": stream_url,
+            "fileName": self.render_path.rsplit("/", 1)[-1] if self.render_path else None,
+            "canDownload": self.render_path is not None,
         }
 
 

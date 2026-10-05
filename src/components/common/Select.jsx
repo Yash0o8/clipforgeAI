@@ -45,7 +45,7 @@ export function Select({
           onChange={(event) => onChange(event.target.value)}
           aria-describedby={hint ? hintId : undefined}
           className={`h-10 w-full cursor-pointer appearance-none rounded-lg border bg-ink-925 pl-3 pr-9 text-sm text-primary transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/25 disabled:cursor-not-allowed disabled:opacity-55 ${
-            disabled ? 'border-line' : 'border-line-strong hover:border-white/20'
+            disabled ? 'border-line' : 'border-line-strong hover:border-line-hover'
           } ${className}`}
         >
           {options.map((option) => (

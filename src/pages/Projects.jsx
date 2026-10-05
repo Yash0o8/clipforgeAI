@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Button } from '../components/common/Button.jsx';
 import { Badge } from '../components/common/Badge.jsx';
 import { Panel, PanelBody, PanelHeader } from '../components/common/Panel.jsx';
@@ -24,7 +24,7 @@ function ProjectHeader({ project, clipCount }) {
         <div className="min-w-0">
           <h1 className="truncate text-[17px] font-semibold text-primary">{project.title}</h1>
           <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-secondary">
-            <span>{project.originalName}</span>
+            <span>{project.fileName}</span>
             <span aria-hidden></span>
             <span className="tabular">{formatClock(project.durationSec)}</span>
             <span aria-hidden></span>
@@ -70,6 +70,7 @@ function ProjectHeader({ project, clipCount }) {
  */
 export function ProjectPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { projects, clips: allClips, ensureClips } = useApp();
   const project = projects.find((p) => p.id === id) ?? null;
 
@@ -86,7 +87,7 @@ export function ProjectPage() {
       <ErrorState
         title="Project not found"
         message="The project may have been deleted or the link is incorrect."
-        onRetry={() => {}}
+        onRetry={() => navigate('/app/projects')}
         retryLabel="Back to projects"
       />
     );

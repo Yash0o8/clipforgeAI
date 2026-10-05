@@ -4,8 +4,8 @@ import { useToast } from '../../hooks/useToast.js';
 
 const TONES = {
   info: { icon: Info, ring: 'border-info/30', accent: 'text-info' },
-  success: { icon: CheckCircle2, ring: 'border-success/30', accent: 'text-emerald-400' },
-  warning: { icon: AlertTriangle, ring: 'border-warning/30', accent: 'text-amber-400' },
+  success: { icon: CheckCircle2, ring: 'border-success/30', accent: 'text-success' },
+  warning: { icon: AlertTriangle, ring: 'border-warning/30', accent: 'text-warning' },
   danger: { icon: XCircle, ring: 'border-danger/35', accent: 'text-danger' },
 };
 
@@ -53,7 +53,7 @@ export function ToastViewport() {
                       toast.action.onClick();
                       dismiss(toast.id);
                     }}
-                    className="mt-2 text-[12.5px] font-semibold text-brand-300 transition-colors hover:text-brand-200"
+                    className="mt-2 text-[12.5px] font-semibold text-brand-400 transition-colors hover:text-brand-300"
                   >
                     {toast.action.label}
                   </button>

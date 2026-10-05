@@ -126,7 +126,7 @@ function GlobalSearch({ onNavigate }) {
           onFocus={() => setOpen(true)}
           placeholder="Search projects and clips"
           aria-label="Search projects and clips"
-          className="h-9 w-full rounded-lg border border-line-strong bg-ink-900 pl-9 pr-9 text-[13px] text-primary placeholder:text-faint transition-colors hover:border-white/20 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25 focus:outline-none"
+          className="h-9 w-full rounded-lg border border-line-strong bg-ink-900 pl-9 pr-9 text-[13px] text-primary placeholder:text-faint transition-colors hover:border-line-hover focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25 focus:outline-none"
         />
         {query && (
           <button
@@ -320,7 +320,7 @@ export function Header({ onOpenSidebar }) {
         <Link
           to="/app/settings"
           aria-label={`Account settings for ${profile.name}`}
-          className="hidden items-center gap-2.5 rounded-lg border border-line-strong bg-ink-900 py-1 pr-3 pl-1 transition-colors hover:border-white/20 sm:flex"
+          className="hidden items-center gap-2.5 rounded-lg border border-line-strong bg-ink-900 py-1 pr-3 pl-1 transition-colors hover:border-line-hover sm:flex"
         >
           <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-brand-400 to-brand-700 text-[11px] font-bold text-white">
             {initials(profile.name)}

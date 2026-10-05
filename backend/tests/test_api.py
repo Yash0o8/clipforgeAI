@@ -564,6 +564,95 @@ def test_export_renders_a_real_mp4_and_downloads_it(client, ready_project, clip_
     assert file_response.content[4:8] == b"ftyp"
 
 
+def test_completed_export_streams_inline_for_the_video_element(
+    client, ready_project, clip_rows, ffmpeg_path
+):
+    """`<video src>` has no way to send a token, so streaming must not need one.
+
+    This is the path ClipEditor plays. If it 403s or forces a download the
+    preview silently falls back to a poster and the render is invisible.
+    """
+    queued = client.post(f"{API}/clips/{clip_rows[0]['id']}/export", json={}).json()
+    job_id = queued["jobId"]
+
+    finished = wait_for(
+        client,
+        f"{API}/exports/{job_id}",
+        lambda payload: payload["status"] in ("complete", "failed"),
+        timeout=180,
+    )
+    assert finished["status"] == "complete", finished.get("error")
+
+    # The job payload must advertise a tokenless, inline URL for the player.
+    assert finished["streamUrl"] == f"{API}/exports/{job_id}/stream"
+    assert finished["url"] == finished["streamUrl"]
+
+    full = client.get(finished["streamUrl"])
+
+    assert full.status_code == 200
+    assert full.headers["content-type"] == "video/mp4"
+    assert full.headers["accept-ranges"] == "bytes"
+    # `attachment` makes a browser download instead of playing.
+    assert "attachment" not in full.headers.get("content-disposition", "")
+    assert full.content[4:8] == b"ftyp"
+
+    # Seeking requires 206; without it the player can start but never scrub.
+    first = client.get(finished["streamUrl"], headers={"Range": "bytes=0-9"})
+
+    assert first.status_code == 206
+    assert first.headers["content-range"].startswith("bytes 0-9/")
+    assert first.content[4:8] == b"ftyp"
+
+    middle = client.get(finished["streamUrl"], headers={"Range": "bytes=1000-1099"})
+    assert middle.status_code == 206
+    assert middle.headers["content-range"] == f"bytes 1000-1099/{full.headers['content-length']}"
+
+    # Suffix form: the last N bytes.
+    suffix = client.get(finished["streamUrl"], headers={"Range": "bytes=-16"})
+    assert suffix.status_code == 206
+    assert len(suffix.content) == 16
+
+    # Past the end of the file is a 416, not a 500 that would kill playback.
+    past_end = client.get(finished["streamUrl"], headers={"Range": "bytes=99999999-"})
+    assert past_end.status_code == 416
+
+    # Some players probe with HEAD before issuing a GET.
+    head = client.head(finished["streamUrl"])
+    assert head.status_code == 200
+    assert head.headers["content-type"] == "video/mp4"
+    assert head.headers["accept-ranges"] == "bytes"
+
+
+def test_stream_rejects_an_unfinished_export(client, ready_project, clip_rows):
+    queued = client.post(f"{API}/clips/{clip_rows[0]['id']}/export", json={}).json()
+
+    response = client.get(f"{API}/exports/{queued['jobId']}/stream")
+
+    assert response.status_code == 409
+
+
+def test_stream_404s_for_an_unknown_export(client):
+    assert client.get(f"{API}/exports/exp_missing/stream").status_code == 404
+
+
+def test_exports_can_be_listed_scoped_by_project_id(client, ready_project, clip_rows):
+    """The frontend filters with `?projectId=`; the server must honour it."""
+    clip_id = clip_rows[0]["id"]
+    queued = client.post(f"{API}/clips/{clip_id}/export", json={}).json()
+    wait_for(
+        client,
+        f"{API}/exports/{queued['jobId']}",
+        lambda payload: payload["status"] in ("complete", "failed"),
+        timeout=180,
+    )
+
+    scoped = client.get(f"{API}/exports", params={"projectId": ready_project["id"]}).json()
+
+    assert scoped, "the project filter returned nothing"
+    assert {item["clipId"] for item in scoped} == {clip_id}
+    assert all(item["streamUrl"] for item in scoped if item["status"] == "complete")
+
+
 def test_download_requires_a_valid_token(client, ready_project, clip_rows, ffmpeg_path):
     queued = client.post(f"{API}/clips/{clip_rows[0]['id']}/export", json={}).json()
     job_id = queued["jobId"]

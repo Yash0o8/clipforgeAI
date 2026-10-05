@@ -72,7 +72,7 @@ export function SettingsPage() {
               checked={settings.theme === 'dark'}
               onChange={(checked) => patchSettings({ theme: checked ? 'dark' : 'light' })}
               label={`Theme  ${themeLabel}`}
-              description="The UI is optimised for a dark workspace."
+              description="Dark is the default; light keeps the same layout and palette."
             />
             <Toggle
               id="reduced-motion"
@@ -85,19 +85,23 @@ export function SettingsPage() {
         </Panel>
 
         <Panel>
-          <PanelHeader title="Processing" subtitle="Demo defaults used until backend is live." />
+          <PanelHeader title="Processing" subtitle="Applied across the editor." />
           <PanelBody className="space-y-3">
             <Toggle
               id="autoplay-preview"
-              checked={settings.autoplayPreview}
-              onChange={(checked) => patchSettings({ autoplayPreview: checked })}
+              checked={settings.preferences.autoplayPreview}
+              onChange={(checked) =>
+                patchSettings({ preferences: { autoplayPreview: checked } })
+              }
               label="Autoplay clip preview"
-              description="Start playing when opening the editor in demo mode."
+              description="Start playing when the editor opens."
             />
             <Toggle
               id="showCaptionsDefault"
-              checked={settings.showCaptionsDefault}
-              onChange={(checked) => patchSettings({ showCaptionsDefault: checked })}
+              checked={settings.preferences.showCaptionsDefault}
+              onChange={(checked) =>
+                patchSettings({ preferences: { showCaptionsDefault: checked } })
+              }
               label="Show captions by default"
               description="Default for poster and editor views."
             />

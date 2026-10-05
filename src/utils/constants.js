@@ -10,7 +10,7 @@
 /*  Storage                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** localStorage namespace. Bump the suffix to invalidate persisted demo state. */
+/** localStorage namespace. Bump the suffix to invalidate persisted state. */
 export const STORAGE_KEY = 'clipforge.v1';
 
 /* -------------------------------------------------------------------------- */
@@ -348,9 +348,9 @@ export const EXPORT_FORMATS = [
 /**
  * Export statuses.
  *
- * `pending_backend` is used deliberately: rendering a real MP4 requires FFmpeg
- * on a server. Rather than pretend an export succeeded, demo exports land in
- * this state and the UI explains what is missing.
+ * `pending_backend` is a real state: rendering an MP4 requires FFmpeg on the
+ * server. Rather than pretend an export succeeded, it lands in this state and
+ * the UI explains what is missing.
  */
 export const EXPORT_STATUS = {
   QUEUED: 'queued',

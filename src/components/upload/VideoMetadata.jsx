@@ -94,8 +94,8 @@ export function VideoMetadata({ file, metadata, isReading = false, title, onTitl
         <p className="mt-3.5 flex items-start gap-2 rounded-lg border border-line bg-ink-900/60 px-3 py-2.5 text-[11.5px] leading-relaxed text-faint">
           <Gauge aria-hidden className="mt-px size-3.5 shrink-0" />
           <span>
-            Your file stays on this device. Nothing is uploaded to a server in demo mode — processing
-            runs entirely in the page.
+            Your file is uploaded to your own ClipForge backend and processed there. Nothing
+            is sent to a third-party service.
           </span>
         </p>
       </div>

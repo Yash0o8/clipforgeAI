@@ -1,9 +1,9 @@
 const TONES = {
   brand: 'bg-brand-500',
-  success: 'bg-emerald-500',
-  warning: 'bg-amber-500',
-  danger: 'bg-red-500',
-  info: 'bg-blue-500',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+  info: 'bg-info',
   neutral: 'bg-ink-500',
 };
 

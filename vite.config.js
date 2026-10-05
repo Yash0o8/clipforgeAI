@@ -26,9 +26,6 @@ export default defineConfig({
         // Rolldown (Vite 8) requires manualChunks as a function, not an object.
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
-          if (id.includes('recharts') || id.includes('d3-') || id.includes('victory-')) {
-            return 'charts';
-          }
           if (id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils')) {
             return 'motion';
           }

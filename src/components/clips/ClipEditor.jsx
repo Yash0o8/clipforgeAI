@@ -92,7 +92,7 @@ function TranscriptPanel({ transcript, currentTime, onSeek }) {
  */
 export function ClipEditor({ clipId }) {
   const toast = useToast();
-  const { setClipStatus, patchClip, trackExport, patchExport } = useApp();
+  const { setClipStatus, patchClip, trackExport, patchExport, settings } = useApp();
 
   const {
     clip,
@@ -133,10 +133,50 @@ export function ClipEditor({ clipId }) {
   useEffect(() => () => abortExportRef.current?.abort(), []);
 
   /**
-   * The uploaded source, served by the backend with range support so the
-   * `<video>` element can seek instead of streaming the whole file.
+   * Adopt a render that already finished in an earlier session.
+   *
+   * Without this, `job` stays null on reload and the preview silently falls back
+   * to the full source, so a completed export would never be shown.
    */
-  const sourceUrl = project?.objectUrl ? resolveUrl(project.objectUrl) : null;
+  useEffect(() => {
+    const ownerProjectId = project?.id;
+    if (!clipId || !ownerProjectId || job) return undefined;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    // Scoping the request to the project keeps the lookup cheap; without it the
+    // server returns every render this server has ever produced.
+    clipService
+      .listExports({ projectId: ownerProjectId, signal })
+      .then((jobs) => {
+        if (signal.aborted) return;
+        // Newest first, so the first match is this clip's latest render.
+        const latest = jobs.find((item) => item.clipId === clipId);
+        if (!latest) return;
+        setJob(latest);
+        patchExport(latest.jobId ?? latest.id, latest);
+      })
+      .catch(() => {});
+
+    return () => controller.abort();
+  }, [clipId, project?.id, job, patchExport]);
+
+  /**
+   * Which file the preview should play.
+   *
+   * A completed render is the better source — it is already trimmed, captioned
+   * and at the clip's aspect ratio — so it wins whenever one exists. The
+   * `streamUrl` is the tokenless inline endpoint: `<video>` cannot attach an
+   * Authorization header or fetch a token first, so the tokenised download link
+   * is unusable here and would 403.
+   */
+  const renderJob = job;
+  const isRenderReady =
+    renderJob?.status === 'complete' && Boolean(renderJob?.streamUrl ?? renderJob?.url);
+  const sourceUrl = isRenderReady
+    ? resolveUrl(renderJob.streamUrl ?? renderJob.url)
+    : (project?.objectUrl ? resolveUrl(project.objectUrl) : null);
 
   const durationSec = (draft?.endSec ?? 0) - (draft?.startSec ?? 0);
 
@@ -390,9 +430,13 @@ export function ClipEditor({ clipId }) {
                 isPlaying={isPlaying}
                 seekTo={scrubTarget}
                 onTogglePlay={onTogglePlay}
+                onPlayingChange={setIsPlaying}
                 onTimeUpdate={setPlayhead}
                 preset={preset}
                 captionText={draft.caption?.text}
+                showCaptions={settings.preferences.showCaptionsDefault}
+                autoPlay={settings.preferences.autoplayPreview}
+                timeBase={isRenderReady ? draft.startSec : 0}
               />
             </div>
 
@@ -486,7 +530,7 @@ export function ClipEditor({ clipId }) {
                         className={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2.5 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-400 ${
                           selected
                             ? 'border-brand-500/60 bg-brand-500/10'
-                            : 'border-line-strong bg-ink-900 hover:border-white/20'
+                            : 'border-line-strong bg-ink-900 hover:border-line-hover'
                         }`}
                       >
                         {/* True ratio, so the options are self-explanatory. */}

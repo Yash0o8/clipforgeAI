@@ -60,7 +60,7 @@ export function ProcessingPage() {
       <Panel>
         <PanelHeader
           title={project.title}
-          subtitle={project.originalName}
+          subtitle={project.fileName}
           actions={
             <Button as={Link} to={`/app/projects/${project.id}`} size="xs" variant="ghost">
               Go to project
@@ -181,7 +181,7 @@ export function ProcessingPage() {
           ) : (
             <p className="text-center text-[11px] text-faint">
               {isRunning
-                ? 'This runs in demo mode. No video is sent to a server.'
+                ? 'Running on the server. You can leave this page and come back.'
                 : 'Processing is paused while you are away.'}
             </p>
           )}

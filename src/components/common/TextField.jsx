@@ -9,7 +9,7 @@ const CONTROL_BASE =
 function borderClass(error, disabled) {
   if (error) return 'border-danger/50';
   if (disabled) return 'border-line';
-  return 'border-line-strong hover:border-white/20';
+  return 'border-line-strong hover:border-line-hover';
 }
 
 /**

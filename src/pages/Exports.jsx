@@ -41,7 +41,7 @@ export function ExportsPage() {
       <header>
         <h1 className="text-[17px] font-semibold text-primary">Exports</h1>
         <p className="mt-0.5 text-sm text-secondary">
-          Video renders are job-based and need the backend. Sidecars download immediately.
+          Video renders and caption sidecars for every clip you have edited.
         </p>
       </header>
 

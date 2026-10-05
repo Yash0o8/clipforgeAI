@@ -156,7 +156,7 @@ export function buildClipManifest(clip, project, exportSettings) {
       ? {
           id: project.id,
           title: project.title,
-          originalName: project.originalName,
+          fileName: project.fileName,
           durationSec: project.durationSec,
           width: project.width,
           height: project.height,
