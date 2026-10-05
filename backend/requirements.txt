@@ -1,0 +1,36 @@
+# ClipForge AI - backend service
+#
+# Install with:
+#   pip install -r backend/requirements.txt
+#
+# faster-whisper pulls ctranslate2 + tokenizers. On Windows the CUDA build of
+# ctranslate2 is NOT bundled; CPU works out of the box. For GPU use see
+# backend/README.md.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+SQLAlchemy==2.0.36
+
+# Transcription. Word-level timestamps are required for karaoke captions.
+# 1.2.1 is the verified version: it returns word timings on CPU and its bundled
+# ctranslate2 4.8.2 has a Windows CPU wheel.
+#
+# NOTE: do not "simplify" the audio loading in app/pipeline/transcribe.py back
+# to faster_whisper.audio.decode_audio. That helper calls av.open(...,
+# metadata_errors="ignore"), and PyAV >= 14 removed the argument, so it raises
+# TypeError against any current PyAV. The local loader shells out to ffmpeg and
+# reads 16 kHz mono PCM with the stdlib instead.
+faster-whisper==1.2.1
+numpy>=1.26
+
+# Optional LLM ranking. Both are importable without an API key set; the
+# pipeline falls back to pure heuristic scoring when neither key is present.
+anthropic==0.42.0
+openai==1.59.6
+
+# Test client.
+pytest==8.3.4
+httpx==0.28.1

@@ -1,0 +1,20 @@
+# Normalize line endings on checkin, restore on checkout.
+#
+# Without this, Windows writes CRLF into the working tree, and those CRLFs get
+# committed. The next person to clone on Linux or macOS sees every file as
+# modified, which buries real diffs in whitespace noise.
+* text=auto eol=lf
+
+# Files Git should treat as binary: never rewrite line endings inside them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+
+# Windows scripts genuinely require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

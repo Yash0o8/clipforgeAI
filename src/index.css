@@ -1,0 +1,332 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   ClipForge AI — Design tokens
+   Tailwind v4 is CSS-first: every token below becomes a real utility
+   (bg-ink-900, text-brand-400, border-line, ...) and a real CSS variable,
+   so the palette can be referenced from JS and SVG as well.
+   ========================================================================== */
+@theme {
+  /* --- Surfaces: deep navy-black -> charcoal --------------------------- */
+  --color-ink-950: #07070c;
+  --color-ink-925: #090910;
+  --color-ink-900: #0c0c14;
+  --color-ink-850: #11111b;
+  --color-ink-800: #16161f;
+  --color-ink-750: #1c1c27;
+  --color-ink-700: #232330;
+  --color-ink-600: #2e2e3d;
+  --color-ink-500: #3d3d50;
+
+  /* --- Accent: electric violet ----------------------------------------- */
+  --color-brand-200: #ddd6fe;
+  --color-brand-300: #c4b5fd;
+  --color-brand-400: #a78bfa;
+  --color-brand-500: #8b5cf6;
+  --color-brand-600: #7c3aed;
+  --color-brand-700: #6d28d9;
+  --color-brand-800: #5b21b6;
+
+  /* --- Semantic -------------------------------------------------------- */
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-info: #60a5fa;
+
+  /* --- Text ------------------------------------------------------------ */
+  --color-primary: #f4f4f7;
+  --color-secondary: #9b9bb0;
+  --color-faint: #6b6b80;
+
+  /* --- Hairlines ------------------------------------------------------- */
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line-strong: rgba(255, 255, 255, 0.13);
+
+  /* --- Typography ------------------------------------------------------ */
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Consolas, monospace;
+
+  /* --- Radii ----------------------------------------------------------- */
+  --radius-panel: 0.875rem;
+  --radius-card: 0.75rem;
+
+  /* --- Shadows --------------------------------------------------------- */
+  --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.5), 0 16px 40px -16px rgba(0, 0, 0, 0.75);
+  --shadow-glow: 0 0 0 1px rgba(167, 139, 250, 0.22), 0 8px 32px -8px rgba(124, 58, 237, 0.4);
+
+  /* --- Motion ---------------------------------------------------------- */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-pulse-ring: pulse-ring 2s ease-out infinite;
+  --animate-scan: scan 2.6s var(--ease-out-soft) infinite;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-rise: rise 0.5s var(--ease-out-soft) both;
+
+  @keyframes shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes pulse-ring {
+    0% {
+      box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4);
+    }
+    70% {
+      box-shadow: 0 0 0 12px rgba(139, 92, 246, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+    }
+  }
+  @keyframes scan {
+    0% {
+      transform: translateY(-100%);
+      opacity: 0;
+    }
+    12% {
+      opacity: 1;
+    }
+    88% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(1400%);
+      opacity: 0;
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--color-line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-color: var(--color-ink-700) transparent;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-ink-950);
+    color: var(--color-primary);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Never allow a wide child to force a horizontal scrollbar on the page. */
+  #root {
+    min-height: 100dvh;
+    overflow-x: clip;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand-400);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-brand-500) 35%, transparent);
+    color: #fff;
+  }
+
+  /* Number readouts (timestamps, scores, counters) line up in columns. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  input[type='range'] {
+    accent-color: var(--color-brand-500);
+  }
+
+  input[type='color'] {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type='color']::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  input[type='color']::-webkit-color-swatch {
+    border: 1px solid var(--color-line-strong);
+    border-radius: 6px;
+  }
+}
+
+/* ==========================================================================
+   Component-level primitives (kept small and composable)
+   ========================================================================== */
+@layer components {
+  /* Standard dashboard surface: charcoal panel + hairline border. */
+  .panel {
+    background-color: var(--color-ink-850);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-panel);
+  }
+
+  .panel-raised {
+    background-color: var(--color-ink-800);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-panel);
+    box-shadow: var(--shadow-panel);
+  }
+
+  /* Inset well used for previews, timelines and code-like blocks. */
+  .well {
+    background-color: var(--color-ink-925);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+  }
+
+  .hairline-t {
+    border-top: 1px solid var(--color-line);
+  }
+
+  /* Animated loading placeholder. */
+  .skeleton {
+    background-image: linear-gradient(
+      90deg,
+      var(--color-ink-800) 0%,
+      var(--color-ink-700) 40%,
+      var(--color-ink-800) 80%
+    );
+    background-size: 200% 100%;
+    animation: var(--animate-shimmer);
+  }
+
+  /* Thin, unobtrusive scrollbars for scroll regions. */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-600) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--color-ink-600);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-ink-500);
+  }
+
+  /* Skip link: visually hidden until focused. */
+  .skip-link {
+    position: absolute;
+    left: 0.75rem;
+    top: 0.75rem;
+    z-index: 100;
+    transform: translateY(-200%);
+    transition: transform 0.18s var(--ease-out-soft);
+  }
+  .skip-link:focus-visible {
+    transform: translateY(0);
+  }
+
+  /* Clipboard-safe gradient headline treatment. */
+  .gradient-text {
+    background-image: linear-gradient(120deg, #ffffff 8%, var(--color-brand-300) 58%, var(--color-brand-500));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+/* ==========================================================================
+   Utilities
+   ========================================================================== */
+@layer utilities {
+  /* Faint grid used behind hero / empty states. */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+
+  .bg-noise {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E");
+  }
+
+  .mask-fade-b {
+    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+  }
+
+  /* Safe-area helpers for mobile devices with a notch / home indicator. */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+/* ==========================================================================
+   Motion preferences
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
