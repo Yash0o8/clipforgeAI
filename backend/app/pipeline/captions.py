@@ -275,8 +275,11 @@ def build_style(
     highlight_color: str | None = None,
 ) -> CaptionStyle:
     """Resolve a preset + position + resolution into concrete ASS styling."""
-    preset = PRESETS.get(preset_id or DEFAULT_PRESET, PRESETS[DEFAULT_PRESET])
-    position = resolve_position(preset_id, position_override)
+    resolved_preset_id = preset_id or DEFAULT_PRESET
+    if resolved_preset_id not in PRESETS:
+        resolved_preset_id = DEFAULT_PRESET
+    preset = PRESETS[resolved_preset_id]
+    position = resolve_position(resolved_preset_id, position_override)
 
     size = font_size(preset, width)
 
@@ -302,7 +305,7 @@ def build_style(
     highlight = highlight_color or preset["highlight"]
 
     return CaptionStyle(
-        preset_id=preset_id or DEFAULT_PRESET,
+        preset_id=resolved_preset_id,
         font_name=FONT_NAME,
         font_size=size,
         primary=to_ass_color(preset["color"]),
