@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..db import Clip, ExportJob, get_session, new_session, utcnow
+from ..db import Clip, ExportJob, Project, get_session, new_session, utcnow
 from ..jobs import JobContext, get_queue
 from ..pipeline.exports import (
     ExportError,
@@ -99,6 +99,22 @@ def start_export(
             detail="This project has no video track, so there is nothing to render a clip from.",
         )
 
+    settings = get_settings()
+    if settings.enable_demo_limits:
+        from datetime import datetime, timezone
+
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        exports_today = (
+            session.query(ExportJob)
+            .filter(ExportJob.created_at >= today_start)
+            .count()
+        )
+        if exports_today >= settings.demo_max_exports_per_day:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Demo export limit reached ({settings.demo_max_exports_per_day}/day). Try again tomorrow or upgrade.",
+            )
+
     queue = get_queue_or_503()
 
     # One live render per clip. Re-queuing while one is running would race two
@@ -133,6 +149,7 @@ def start_export(
         lambda ctx: _run_export(job.id, ctx),
         settings,
         job_id=job.id,
+        payload={"exportJobId": job.id, "clipId": clip_id},
     )
 
     logger.info("queued export %s for clip %s (%s %s)", job.id, clip_id, payload.format, payload.resolution)

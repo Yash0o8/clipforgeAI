@@ -386,24 +386,21 @@ export function AppProvider({ children }) {
   /* --- Projects ------------------------------------------------------- */
 
   /**
-   * Create a project from an uploaded source.
-   *
-   * Only `uploadId` is required: the backend resolves the file name, size and
-   * MIME type from the stored upload, so sending them from here would risk
-   * describing the source differently from what was actually stored.
-   *
-   * @param {object} params
-   * @param {string} params.uploadId   Handle from `uploadVideo`.
-   * @param {string} [params.title]
-   * @param {string} [params.fileName] Used only to derive a default title.
-   * @returns {Promise<object>} The project as the backend now sees it.
+   * Add or create a project.
+   * Accepts either an already-created project object or creation params.
    */
-  const addProject = useCallback(async ({ uploadId, title, fileName } = {}) => {
-    if (!uploadId) throw new Error('Cannot create a project without an uploaded file.');
+  const addProject = useCallback(async (params = {}) => {
+    if (params?.id) {
+      dispatch({ type: 'projects/add', project: params });
+      return params;
+    }
+    const { uploadId, title, fileName, ...rest } = params;
+    if (!uploadId && !rest.sourceUrl) throw new Error('Cannot create a project without an uploaded file or URL.');
 
     const project = await projectService.createProject({
       uploadId,
       title: title || fileName?.replace(/\.[^/.]+$/, '') || 'Untitled project',
+      ...rest,
     });
 
     dispatch({ type: 'projects/add', project });

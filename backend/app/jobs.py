@@ -120,6 +120,7 @@ class JobQueue:
         fn: Callable[[JobContext], Any],
         settings: Settings | None = None,
         job_id: str | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> JobRecord:
         """Queue a job. Returns immediately.
 
@@ -231,17 +232,103 @@ _queue: JobQueue | None = None
 _queue_lock = threading.Lock()
 
 
+class CeleryQueueAdapter:
+    """Minimal Celery adapter behind the JobQueue interface.
+
+    The app still defaults to the in-process queue. This adapter exists so the
+    queue backend can be switched by config without changing route code.
+    """
+
+    def __init__(self, broker_url: str, backend_url: str) -> None:
+        try:
+            from celery import Celery  # type: ignore
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "Celery queue selected but celery is not installed. Install celery and redis, or set JOB_QUEUE=inline."
+            ) from exc
+        self.app = Celery("clipforge", broker=broker_url, backend=backend_url)
+        self._records: dict[str, JobRecord] = {}
+        self._lock = threading.Lock()
+        self._shutting_down = False
+
+    @property
+    def shutting_down(self) -> bool:
+        return self._shutting_down
+
+    def submit(self, kind: str, project_id: str, fn: Callable[[JobContext], Any], settings: Settings | None = None, job_id: str | None = None, payload: dict[str, Any] | None = None) -> JobRecord:
+        if self._shutting_down:
+            raise RuntimeError("queue is shutting down")
+        record = JobRecord(id=job_id or new_id("job"), project_id=project_id, kind=kind, fn=fn)
+        with self._lock:
+            self._records[record.id] = record
+        try:
+            task_name = {
+                "process": "clipforge.process_project",
+                "generate": "clipforge.generate_project",
+                "export": "clipforge.run_export",
+                "ingest": "clipforge.ingest_youtube",
+            }.get(kind)
+            if not task_name:
+                raise RuntimeError(f"No Celery task registered for kind={kind}")
+            kwargs = {"job_id": record.id, "project_id": project_id}
+            if payload:
+                kwargs["payload"] = payload
+            self.app.send_task(task_name, kwargs=kwargs, task_id=record.id)
+            record.status = "queued"
+        except Exception as exc:
+            record.status = "failed"
+            record.error = str(exc)
+            raise
+        return record
+
+    def cancel(self, job_id: str) -> bool:
+        with self._lock:
+            record = self._records.get(job_id)
+        if not record:
+            return False
+        record._cancel.set()
+        return True
+
+    def cancel_for_project(self, project_id: str, kind: str | None = None) -> int:
+        with self._lock:
+            records = list(self._records.values())
+        n = 0
+        for r in records:
+            if r.project_id == project_id and r.status in ("queued", "running") and (not kind or r.kind == kind):
+                r._cancel.set()
+                n += 1
+        return n
+
+    def get(self, job_id: str) -> JobRecord | None:
+        with self._lock:
+            return self._records.get(job_id)
+
+    def active_for_project(self, project_id: str, kind: str | None = None) -> JobRecord | None:
+        with self._lock:
+            records = [r for r in self._records.values() if r.project_id == project_id]
+        running = [r for r in records if r.status in ("queued", "running") and (not kind or r.kind == kind)]
+        return max(running, key=lambda r: r.created) if running else None
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        with self._lock:
+            records = list(self._records.values())
+        return [{"id": r.id, "projectId": r.project_id, "kind": r.kind, "status": r.status, "stage": r.stage, "progress": r.progress, "error": r.error, "cancelRequested": r._cancel.is_set()} for r in records]
+
+    def shutdown(self, wait: bool = True, timeout: float | None = 120.0) -> None:
+        self._shutting_down = True
+
+
 def get_queue() -> JobQueue:
     """Process-wide queue singleton."""
     global _queue
     if _queue is None:
         with _queue_lock:
             if _queue is None:
-                # Two workers: transcription and rendering are both CPU-bound,
-                # but running them concurrently on a 4-core box mostly just
-                # thrashes. Serial is faster in practice and keeps progress
-                # reporting simple.
-                _queue = JobQueue(max_workers=2)
+                settings = get_settings()
+                if settings.job_queue.lower() == "celery":
+                    _queue = CeleryQueueAdapter(settings.redis_url, settings.redis_url)  # type: ignore[assignment]
+                else:
+                    _queue = JobQueue(max_workers=2)
     return _queue
 
 

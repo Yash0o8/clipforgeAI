@@ -23,12 +23,22 @@ ProjectStatus = Literal["draft", "uploading", "processing", "ready", "failed", "
 ClipStatus = Literal["suggested", "selected", "edited", "exported"]
 AspectRatio = Literal["9:16", "1:1", "16:9"]
 ExportFormat = Literal["mp4", "webm"]
-ExportStatus = Literal["queued", "rendering", "complete", "pending_backend", "failed"]
+ExportStatus = Literal["queued", "rendering", "complete", "pending_backend", "failed", "cancelled"]
 StageKey = Literal["upload", "audio", "transcript", "highlights", "prepare"]
-CaptionPresetId = Literal["clean", "bold", "karaoke", "minimal", "creator"]
-CaptionPosition = Literal["top", "center", "lower"]
+CaptionPresetId = Literal[
+    "clean",
+    "bold",
+    "karaoke",
+    "minimal",
+    "creator",
+    "hormozi",
+    "split_center",
+]
+CaptionPosition = Literal["top", "center", "lower", "divider"]
+RenderMode = Literal["default", "podcast", "split_screen", "gaming"]
+ProjectPresetId = Literal["podcast", "split_screen", "gaming", "custom"]
 
-VALID_RESOLUTIONS = ("1080x1920", "1080x1080", "1920x1080")
+VALID_RESOLUTIONS = ("1080x1920", "1080x1080", "1920x1080", "720x1280", "854x480", "480x854")
 
 
 class CamelModel(BaseModel):
@@ -70,6 +80,11 @@ class CaptionSettings(CamelModel):
     text: str = ""
     presetId: CaptionPresetId = "clean"
     position: CaptionPosition | None = None
+    keywordHighlight: bool = False
+    highlightColor: str | None = Field(default=None, max_length=32)
+    # Optional timed caption segments for quick editor. When present, renderer may
+    # use them instead of transcript-derived cues.
+    segments: list[dict[str, Any]] | None = None
 
 
 class RenderSettings(CamelModel):
@@ -77,6 +92,19 @@ class RenderSettings(CamelModel):
     resolution: str = "1080x1920"
     burnCaptions: bool = True
     lastExportedAt: str | None = None
+    renderMode: RenderMode = "default"
+    presetId: ProjectPresetId | None = None
+    backgroundAssetId: str | None = None
+    preview: bool = False
+    autoZoom: bool = False
+    deadAirRemoval: bool = False
+    sfxEnabled: bool = False
+    facecamEnabled: bool = False
+    facecamAssetId: str | None = None
+    facecamBox: dict[str, float] | None = None
+    watermark: bool = False
+    captionOnly: bool = False
+    frameRate: int | None = Field(default=None, ge=24, le=60)
 
     @field_validator("resolution")
     @classmethod
@@ -97,6 +125,9 @@ class ProjectCreate(CamelModel):
     mimeType: str | None = Field(default=None, max_length=200)
     # Set by the upload flow so the file on disk is linked to this project.
     uploadId: str | None = None
+    sourceUrl: str | None = Field(default=None, max_length=2000)
+    presetId: ProjectPresetId = "podcast"
+    settings: dict[str, Any] | None = None
 
     @field_validator("title")
     @classmethod
@@ -110,6 +141,7 @@ class ProjectCreate(CamelModel):
 class ProjectPatch(CamelModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     status: ProjectStatus | None = None
+    presetId: ProjectPresetId | None = None
     settings: dict[str, Any] | None = None
 
 
@@ -128,6 +160,11 @@ class ClipPatch(CamelModel):
     caption: CaptionSettings | None = None
     export: RenderSettings | None = None
     status: ClipStatus | None = None
+    viralScore: int | None = Field(default=None, ge=0, le=100)
+    keywords: list[str] | None = None
+    hashtags: list[str] | None = None
+    description: str | None = Field(default=None, max_length=4000)
+    hookBanner: str | None = Field(default=None, max_length=300)
 
 
 class ExportRequest(CamelModel):
@@ -137,7 +174,23 @@ class ExportRequest(CamelModel):
     captionPresetId: CaptionPresetId | None = None
     captionText: str | None = Field(default=None, max_length=500)
     captionPosition: CaptionPosition | None = None
+    captionSegments: list[dict[str, Any]] | None = None
     burnCaptions: bool = True
+    renderMode: RenderMode | None = None
+    presetId: ProjectPresetId | None = None
+    backgroundAssetId: str | None = None
+    preview: bool = False
+    autoZoom: bool = False
+    deadAirRemoval: bool = False
+    sfxEnabled: bool = False
+    facecamEnabled: bool = False
+    facecamAssetId: str | None = None
+    facecamBox: dict[str, float] | None = None
+    watermark: bool = False
+    keywordHighlight: bool | None = None
+    highlightColor: str | None = Field(default=None, max_length=32)
+    captionOnly: bool = False
+    frameRate: int | None = Field(default=None, ge=24, le=60)
 
     @field_validator("resolution")
     @classmethod
@@ -174,7 +227,9 @@ class HealthResponse(BaseModel):
     ffmpeg: bool
     whisperModel: str
     llmProvider: str | None
+    llmProviders: list[str] = Field(default_factory=list)
     device: str
+    youtubeIngest: bool = True
 
 
 class DownloadResponse(BaseModel):
@@ -184,3 +239,10 @@ class DownloadResponse(BaseModel):
     expiresAt: str
     fileName: str
     sizeBytes: int | None = None
+
+
+class YouTubeIngestRequest(CamelModel):
+    url: str = Field(min_length=8, max_length=2000)
+    title: str | None = Field(default=None, max_length=200)
+    presetId: ProjectPresetId = "podcast"
+    settings: dict[str, Any] | None = None

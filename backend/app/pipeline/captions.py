@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-PositionId = Literal["top", "center", "lower"]
+PositionId = Literal["top", "center", "lower", "divider"]
 
 # Colours as #RRGGBB or #RGB, matching the CSS values in constants.js.
 PRESETS: dict[str, dict[str, Any]] = {
@@ -47,6 +47,20 @@ PRESETS: dict[str, dict[str, Any]] = {
         "margin_v": 0,
         "margin_h": 70,
     },
+    "hormozi": {
+        "label": "Hormozi",
+        "position": "center",
+        "size": 0.068,
+        "weight": 900,
+        "uppercase": True,
+        "color": "#ffffff",
+        "highlight": "#facc15",
+        "background": "transparent",
+        "outline": 4.5,
+        "shadow": 1.5,
+        "margin_v": 0,
+        "margin_h": 64,
+    },
     "karaoke": {
         "label": "Karaoke",
         "position": "lower",
@@ -59,6 +73,20 @@ PRESETS: dict[str, dict[str, Any]] = {
         "outline": 0,
         "shadow": 2,
         "margin_v": 260,
+        "margin_h": 80,
+    },
+    "split_center": {
+        "label": "Split Center",
+        "position": "divider",
+        "size": 0.05,
+        "weight": 800,
+        "uppercase": True,
+        "color": "#ffffff",
+        "highlight": "#facc15",
+        "background": "rgba(0, 0, 0, 0.35)",
+        "outline": 1.5,
+        "shadow": 1,
+        "margin_v": 0,
         "margin_h": 80,
     },
     "minimal": {
@@ -105,6 +133,9 @@ RESOLUTION_MAP: dict[str, tuple[int, int]] = {
     "1080x1920": (1080, 1920),
     "1080x1080": (1080, 1080),
     "1920x1080": (1920, 1080),
+    "720x1280": (720, 1280),
+    "854x480": (854, 480),
+    "480x854": (480, 854),
 }
 
 
@@ -181,7 +212,7 @@ def resolve_position(preset_id: str | None, override: str | None) -> str:
     A null position means "inherit the preset's own", matching the frontend's
     ``position: null -> preset default`` behaviour.
     """
-    if override in ("top", "center", "lower"):
+    if override in ("top", "center", "lower", "divider"):
         return override
     preset = PRESETS.get(preset_id or DEFAULT_PRESET, PRESETS[DEFAULT_PRESET])
     return preset["position"]
@@ -197,13 +228,14 @@ def font_size(style: dict[str, Any], frame_width: int) -> int:
 
 def alignment(position: str) -> int:
     """ASS alignment: bottom-centre / middle-centre / top-centre."""
-    return {"lower": 2, "center": 5, "top": 8}.get(position, 2)
+    return {"lower": 2, "center": 5, "top": 8, "divider": 5}.get(position, 2)
 
 
 @dataclass(frozen=True)
 class CaptionStyle:
     """Resolved, ASS-ready styling for one render."""
 
+    preset_id: str
     font_name: str
     font_size: int
     # Spoken / already-highlighted colour.
@@ -240,6 +272,7 @@ def build_style(
     resolution: str,
     width: int,
     height: int,
+    highlight_color: str | None = None,
 ) -> CaptionStyle:
     """Resolve a preset + position + resolution into concrete ASS styling."""
     preset = PRESETS.get(preset_id or DEFAULT_PRESET, PRESETS[DEFAULT_PRESET])
@@ -258,20 +291,31 @@ def build_style(
     # exactly what BorderStyle=3 uses as box padding.
     box_padding = 6 if has_box else 0
 
+    margin_v = int(round(preset["margin_v"] * scale_y))
+    align = alignment(position)
+    if position == "divider":
+        # Place captions at the split-screen divider (middle of 9:16 frame).
+        # Use bottom-center alignment so MarginV is reliable across renderers.
+        align = 2
+        margin_v = max(0, int(height * 0.48))
+
+    highlight = highlight_color or preset["highlight"]
+
     return CaptionStyle(
+        preset_id=preset_id or DEFAULT_PRESET,
         font_name=FONT_NAME,
         font_size=size,
         primary=to_ass_color(preset["color"]),
-        secondary=to_ass_color(preset["highlight"]),
+        secondary=to_ass_color(highlight),
         outline=to_ass_color("#000000", alpha=0x80),
-        alignment=alignment(position),
+        alignment=align,
         bold=bool(preset.get("weight", 600) >= 700),
         uppercase=bool(preset.get("uppercase")),
         # A heavy shadow reads better than an outline for the "bold" preset,
         # which is why shadow comes from the preset's own css `shadow` string.
         outline_width=float(preset.get("outline", 0)),
         shadow=float(preset.get("shadow", 0)),
-        margin_v=int(round(preset["margin_v"] * scale_y)),
+        margin_v=margin_v,
         margin_h=int(round(preset["margin_h"] * scale_x)),
         border_style=3 if has_box else 1,
         box_padding=box_padding,

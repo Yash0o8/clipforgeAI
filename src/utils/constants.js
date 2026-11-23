@@ -269,6 +269,25 @@ export const CAPTION_PRESETS = [
     },
   },
   {
+    id: 'hormozi',
+    label: 'Hormozi',
+    description: 'High-impact animated captions with keyword pop and punchy color.',
+    style: {
+      position: 'center',
+      size: 0.066,
+      weight: 900,
+      transform: 'uppercase',
+      color: '#ffffff',
+      highlight: '#22c55e',
+      background: 'transparent',
+      radius: 8,
+      padding: '0.3em 0.45em',
+      shadow: '0 4px 0 rgba(0,0,0,0.65), 0 0 24px rgba(0,0,0,0.45)',
+      uppercase: true,
+      karaoke: true,
+    },
+  },
+  {
     id: 'karaoke',
     label: 'Karaoke',
     description: 'Word-by-word highlight driven by the playhead.',
@@ -284,6 +303,25 @@ export const CAPTION_PRESETS = [
       padding: '0.4em 0.6em',
       shadow: '0 2px 10px rgba(0,0,0,0.6)',
       uppercase: false,
+      karaoke: true,
+    },
+  },
+  {
+    id: 'split_center',
+    label: 'Split Center',
+    description: 'Locked to the split-screen divider for top/bottom gameplay layouts.',
+    style: {
+      position: 'divider',
+      size: 0.05,
+      weight: 800,
+      transform: 'uppercase',
+      color: '#ffffff',
+      highlight: '#facc15',
+      background: 'rgba(0,0,0,0.35)',
+      radius: 10,
+      padding: '0.45em 0.8em',
+      shadow: '0 2px 14px rgba(0,0,0,0.55)',
+      uppercase: true,
       karaoke: true,
     },
   },
@@ -334,6 +372,34 @@ export const CAPTION_POSITIONS = [
   { id: 'top', label: 'Top' },
   { id: 'center', label: 'Middle' },
   { id: 'lower', label: 'Bottom' },
+  { id: 'divider', label: 'Split divider' },
+];
+
+export const CREATION_PRESETS = [
+  {
+    id: 'podcast',
+    label: 'Podcast & Talking Head',
+    description: 'Dynamic face tracking, Hormozi captions, auto zoom punchlines.',
+    renderMode: 'podcast',
+    aspectRatio: '9:16',
+    captionPreset: 'hormozi',
+  },
+  {
+    id: 'split_screen',
+    label: '9:16 Split-Screen',
+    description: 'Top main video + bottom gameplay vault, center-line captions.',
+    renderMode: 'split_screen',
+    aspectRatio: '9:16',
+    captionPreset: 'split_center',
+  },
+  {
+    id: 'gaming',
+    label: 'Pro Gaming Mode',
+    description: 'Action detection, dead-air removal, facecam PiP for GTA/Valorant/BGMI.',
+    renderMode: 'gaming',
+    aspectRatio: '9:16',
+    captionPreset: 'bold',
+  },
 ];
 
 /* -------------------------------------------------------------------------- */
@@ -376,8 +442,17 @@ export const EXPORT_KIND = {
 
 export const EXPORT_RESOLUTIONS = [
   { id: '1080x1920', label: '1080 x 1920', note: 'Full HD vertical' },
+  { id: '720x1280', label: '720 x 1280', note: 'HD vertical (720p)' },
+  { id: '480x854', label: '480 x 854', note: 'Fast preview (480p)' },
   { id: '1080x1080', label: '1080 x 1080', note: 'Full HD square' },
   { id: '1920x1080', label: '1920 x 1080', note: 'Full HD landscape' },
+  { id: '854x480', label: '854 x 480', note: 'Fast preview landscape' },
+];
+
+export const RENDER_MODES = [
+  { id: 'default', label: 'Default', description: 'Standard reframed clip' },
+  { id: 'split_screen', label: 'Split Screen', description: 'Top speaker, bottom gameplay' },
+  { id: 'gaming', label: 'Pro Gaming', description: 'Action-aware gaming layout' },
 ];
 
 /* -------------------------------------------------------------------------- */

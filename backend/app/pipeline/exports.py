@@ -48,12 +48,32 @@ def queue_export(
     if burn is None:
         burn = stored_export.get("burnCaptions", True)
 
-    # The caption preset and text can be overridden per-export without touching
-    # the clip, which is what makes "try another style" cheap.
     caption = json.loads(clip.caption_json or "{}")
     preset_id = settings_from_request.get("captionPresetId") or caption.get("presetId") or "clean"
     caption_text = settings_from_request.get("captionText")
     caption_position = settings_from_request.get("captionPosition")
+    caption_segments = settings_from_request.get("captionSegments") or caption.get("segments")
+    render_mode = settings_from_request.get("renderMode") or stored_export.get("renderMode") or "default"
+    background_asset_id = settings_from_request.get("backgroundAssetId") or stored_export.get("backgroundAssetId")
+    preview = bool(settings_from_request.get("preview"))
+    watermark = bool(settings_from_request.get("watermark") or stored_export.get("watermark"))
+    auto_zoom = bool(settings_from_request.get("autoZoom") or stored_export.get("autoZoom"))
+    dead_air = bool(settings_from_request.get("deadAirRemoval") or stored_export.get("deadAirRemoval"))
+    sfx = bool(settings_from_request.get("sfxEnabled") or stored_export.get("sfxEnabled"))
+    facecam_enabled = bool(settings_from_request.get("facecamEnabled") or stored_export.get("facecamEnabled"))
+    facecam_asset_id = settings_from_request.get("facecamAssetId") or stored_export.get("facecamAssetId")
+    facecam_box = settings_from_request.get("facecamBox") or stored_export.get("facecamBox")
+    caption_only = bool(settings_from_request.get("captionOnly"))
+    frame_rate = settings_from_request.get("frameRate") or stored_export.get("frameRate")
+    hook_banner = settings_from_request.get("hookBanner") or stored_export.get("hookBanner") or (clip_meta.get("hookBanner") if isinstance(clip_meta, dict) else None)
+    keyword_highlight = settings_from_request.get("keywordHighlight")
+    if keyword_highlight is None:
+        keyword_highlight = caption.get("keywordHighlight", False)
+    highlight_color = settings_from_request.get("highlightColor") or caption.get("highlightColor")
+    if preview:
+        # Fast preview defaults (480p for speed/cost).
+        resolution = settings_from_request.get("resolution") or "480x854"
+        watermark = True if settings_from_request.get("watermark") is None else watermark
 
     job = ExportJob(
         id=new_id("exp"),
@@ -72,6 +92,22 @@ def queue_export(
                 "captionPresetId": preset_id,
                 "captionText": caption_text,
                 "captionPosition": caption_position,
+                "captionSegments": caption_segments,
+                "renderMode": render_mode,
+                "backgroundAssetId": background_asset_id,
+                "preview": preview,
+                "watermark": watermark,
+                "autoZoom": auto_zoom,
+                "deadAirRemoval": dead_air,
+                "sfxEnabled": sfx,
+                "facecamEnabled": facecam_enabled,
+                "facecamAssetId": facecam_asset_id,
+                "facecamBox": facecam_box,
+                "keywordHighlight": bool(keyword_highlight),
+                "highlightColor": highlight_color,
+                "captionOnly": caption_only,
+                "frameRate": frame_rate,
+                "hookBanner": hook_banner,
             }
         ),
     )
@@ -140,20 +176,156 @@ def run_export(
 
     output = _output_path(job, settings)
 
-    request = RenderRequest(
-        source=source,
-        output=output,
-        start_sec=clip.start_sec,
-        end_sec=clip.end_sec,
-        aspect_ratio=job.aspect_ratio,
-        resolution=job.resolution,
-        fmt=job.format,
-        burn_captions=bool(job.burn_captions),
-        caption_preset_id=options.get("captionPresetId"),
-        caption_position=options.get("captionPosition"),
-        caption_text=options.get("captionText"),
-        transcript=json.loads(clip.transcript_json or "[]"),
-    )
+    caption_only = bool(options.get("captionOnly"))
+    prior_complete = None
+    if caption_only:
+        prior_complete = (
+            session.query(ExportJob)
+            .filter(
+                ExportJob.clip_id == clip.id,
+                ExportJob.status == "complete",
+                ExportJob.id != job.id,
+            )
+            .order_by(ExportJob.created_at.desc())
+            .first()
+        )
+        if prior_complete and prior_complete.render_path:
+            try:
+                prior_path = safe_join(settings.data_dir, prior_complete.render_path)
+            except Exception:
+                prior_path = None
+            if prior_path and prior_path.exists():
+                # Caption-only rerender: reuse prior rendered video as source; no reanalysis.
+                source = prior_path
+                # Rebase source-absolute transcript to clip-relative for the trimmed render.
+                raw_transcript = json.loads(clip.transcript_json or "[]")
+                rebased_transcript = []
+                clip_dur = max(0.1, clip.end_sec - clip.start_sec)
+                for seg in raw_transcript if isinstance(raw_transcript, list) else []:
+                    if not isinstance(seg, dict):
+                        continue
+                    try:
+                        ss = float(seg.get("startSec", 0.0)) - clip.start_sec
+                        ee = float(seg.get("endSec", 0.0)) - clip.start_sec
+                    except Exception:
+                        continue
+                    if ee < -0.1 or ss > clip_dur + 0.1:
+                        continue
+                    seg2 = dict(seg)
+                    seg2["startSec"] = max(0.0, ss)
+                    seg2["endSec"] = max(0.0, min(clip_dur, ee))
+                    words = []
+                    for w in seg.get("words") or []:
+                        if not isinstance(w, dict):
+                            continue
+                        try:
+                            ws = float(w.get("startSec", 0.0)) - clip.start_sec
+                            we = float(w.get("endSec", 0.0)) - clip.start_sec
+                        except Exception:
+                            continue
+                        if we < -0.1 or ws > clip_dur + 0.1:
+                            continue
+                        w2 = dict(w)
+                        w2["startSec"] = max(0.0, ws)
+                        w2["endSec"] = max(0.0, min(clip_dur, we))
+                        words.append(w2)
+                    seg2["words"] = words
+                    rebased_transcript.append(seg2)
+
+                request = RenderRequest(
+                    source=source,
+                    output=output,
+                    start_sec=0.0,
+                    end_sec=clip_dur,
+                    aspect_ratio=job.aspect_ratio,
+                    resolution=job.resolution,
+                    fmt=job.format,
+                    burn_captions=bool(job.burn_captions),
+                    caption_preset_id=options.get("captionPresetId"),
+                    caption_position=options.get("captionPosition"),
+                    caption_text=options.get("captionText"),
+                    caption_segments=options.get("captionSegments"),
+                    transcript=rebased_transcript,
+                    render_mode="default",
+                    background_source=None,
+                    watermark_text=(get_settings().free_watermark_text if options.get("watermark") else None),
+                    hook_banner=str(options.get("hookBanner") or "").strip() or None,
+                    preview=bool(options.get("preview")),
+                    keyword_highlight=bool(options.get("keywordHighlight")),
+                    highlight_color=options.get("highlightColor"),
+                    keywords=(json.loads(clip.meta_json or "{}").get("keywords") or []),
+                    auto_zoom=False,
+                    dead_air_removal=False,
+                    sfx_enabled=False,
+                    facecam_enabled=False,
+                    facecam_source=None,
+                    facecam_box=None,
+                    face_tracks=[],
+                    audio_spikes=[],
+                    scene_cuts=[],
+                    dead_air_intervals=[],
+                    sfx_markers=[],
+                    frame_rate=int(options["frameRate"]) if options.get("frameRate") else None,
+                )
+            else:
+                caption_only = False
+        else:
+            caption_only = False
+
+    if not caption_only:
+        bg_source = None
+        bg_id = options.get("backgroundAssetId")
+        if bg_id:
+            from ..storage import vault_asset_path
+
+            bg_source = vault_asset_path(str(bg_id), settings)
+
+        facecam_source = None
+        facecam_asset_id = options.get("facecamAssetId")
+        if facecam_asset_id:
+            from ..storage import vault_asset_path
+
+            facecam_source = vault_asset_path(str(facecam_asset_id), settings)
+
+        clip_meta = json.loads(clip.meta_json or "{}")
+        project_settings = json.loads(project.settings_json or "{}")
+        face_tracks = clip_meta.get("faceTracks") or project_settings.get("faceTracks") or []
+
+        request = RenderRequest(
+            source=source,
+            output=output,
+            start_sec=clip.start_sec,
+            end_sec=clip.end_sec,
+            aspect_ratio=job.aspect_ratio,
+            resolution=job.resolution,
+            fmt=job.format,
+            burn_captions=bool(job.burn_captions),
+            caption_preset_id=options.get("captionPresetId"),
+            caption_position=options.get("captionPosition"),
+            caption_text=options.get("captionText"),
+            caption_segments=options.get("captionSegments"),
+            transcript=json.loads(clip.transcript_json or "[]"),
+            render_mode=options.get("renderMode") or "default",
+            background_source=bg_source,
+            watermark_text=(get_settings().free_watermark_text if options.get("watermark") else None),
+            hook_banner=str(options.get("hookBanner") or "").strip() or None,
+            preview=bool(options.get("preview")),
+            keyword_highlight=bool(options.get("keywordHighlight")),
+            highlight_color=options.get("highlightColor"),
+            keywords=(clip_meta.get("keywords") or []),
+            auto_zoom=bool(options.get("autoZoom")),
+            dead_air_removal=bool(options.get("deadAirRemoval")),
+            sfx_enabled=bool(options.get("sfxEnabled")) and bool(getattr(settings, "enable_sfx_hooks", False)),
+            facecam_enabled=bool(options.get("facecamEnabled")),
+            facecam_source=facecam_source,
+            facecam_box=options.get("facecamBox") if isinstance(options.get("facecamBox"), dict) else None,
+            face_tracks=face_tracks if isinstance(face_tracks, list) else [],
+            audio_spikes=clip_meta.get("audioSpikes") if isinstance(clip_meta.get("audioSpikes"), list) else [],
+            scene_cuts=clip_meta.get("sceneCuts") if isinstance(clip_meta.get("sceneCuts"), list) else [],
+            dead_air_intervals=clip_meta.get("deadAirIntervals") if isinstance(clip_meta.get("deadAirIntervals"), list) else [],
+            sfx_markers=clip_meta.get("sfxMarkers") if isinstance(clip_meta.get("sfxMarkers"), list) else [],
+            frame_rate=int(options["frameRate"]) if options.get("frameRate") else None,
+        )
 
     try:
         render_clip(request, on_progress=on_progress, cancel=context.should_cancel)

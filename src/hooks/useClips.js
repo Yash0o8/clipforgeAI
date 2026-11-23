@@ -145,6 +145,18 @@ export const DEFAULT_EXPORT_SETTINGS = {
   format: 'mp4',
   resolution: '1080x1920',
   burnCaptions: true,
+  renderMode: 'default',
+  backgroundAssetId: null,
+  preview: false,
+  watermark: false,
+  autoZoom: false,
+  deadAirRemoval: false,
+  sfxEnabled: false,
+  facecamEnabled: false,
+  facecamAssetId: null,
+  facecamBox: { x: 0.72, y: 0.04, w: 0.24, h: 0.24 },
+  captionOnly: false,
+  frameRate: 30,
   lastExportedAt: null,
 };
 
@@ -157,6 +169,12 @@ function toDraft(clip) {
     aspectRatio: clip.aspectRatio,
     caption: { ...clip.caption },
     export: { ...DEFAULT_EXPORT_SETTINGS, ...(clip.export ?? {}) },
+    viralScore: clip.viralScore ?? clip.score ?? 0,
+    hookBanner: clip.hookBanner ?? clip.hook ?? '',
+    keywords: Array.isArray(clip.keywords) ? [...clip.keywords] : [],
+    hashtags: Array.isArray(clip.hashtags) ? [...clip.hashtags] : [],
+    description: clip.description ?? '',
+    meta: clip.meta ?? {},
   };
 }
 
@@ -279,6 +297,20 @@ export function useClipEditor(clipId) {
     setIsDirty(true);
   }, []);
 
+  const setCaptionSegments = useCallback((segments) => {
+    setDraft((current) =>
+      current ? { ...current, caption: { ...current.caption, segments: Array.isArray(segments) ? segments : [] } } : current
+    );
+    setIsDirty(true);
+  }, []);
+
+  const setCaptionSettings = useCallback((patch) => {
+    setDraft((current) =>
+      current ? { ...current, caption: { ...current.caption, ...patch } } : current
+    );
+    setIsDirty(true);
+  }, []);
+
   const setAspectRatio = useCallback((aspectRatio) => {
     setDraft((current) => (current ? { ...current, aspectRatio } : current));
     setIsDirty(true);
@@ -296,6 +328,11 @@ export function useClipEditor(clipId) {
     setIsDirty(true);
   }, []);
 
+  const setMeta = useCallback((patch) => {
+    setDraft((current) => (current ? { ...current, ...patch } : current));
+    setIsDirty(true);
+  }, []);
+
   /** Persist the draft. Any real change marks the clip `edited`. */
   const save = useCallback(() => {
     if (!draft || !clip) return null;
@@ -309,7 +346,11 @@ export function useClipEditor(clipId) {
       aspectRatio: draft.aspectRatio,
       caption: { ...draft.caption },
       export: { ...draft.export },
-      // An edit supersedes any export that was made from the old settings.
+      viralScore: Math.max(0, Math.min(100, Number(draft.viralScore) || 0)),
+      hookBanner: draft.hookBanner || '',
+      keywords: Array.isArray(draft.keywords) ? draft.keywords : [],
+      hashtags: Array.isArray(draft.hashtags) ? draft.hashtags : [],
+      description: draft.description || '',
       status: CLIP_STATUS.EDITED,
     };
 
@@ -341,7 +382,10 @@ export function useClipEditor(clipId) {
     setCaptionPreset,
     setAspectRatio,
     setCaptionPosition,
+    setCaptionSegments,
+    setCaptionSettings,
     setExportSettings,
+    setMeta,
     setClipStatus,
   };
 }

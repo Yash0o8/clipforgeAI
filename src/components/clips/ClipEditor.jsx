@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   CircleAlert,
+  Copy,
   Download,
   Loader2,
   RotateCcw,
@@ -15,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Button, IconButton } from '../common/Button.jsx';
 import { Panel, PanelHeader } from '../common/Panel.jsx';
-import { TextField } from '../common/TextField.jsx';
+import { TextField, TextArea } from '../common/TextField.jsx';
 import { SegmentedControl } from '../common/SegmentedControl.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { Badge } from '../common/Badge.jsx';
@@ -110,13 +111,17 @@ export function ClipEditor({ clipId }) {
     setCaptionText,
     setCaptionPreset,
     setCaptionPosition,
+    setCaptionSegments,
+    setCaptionSettings,
     setExportSettings,
+    setMeta,
   } = useClipEditor(clipId);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(draft?.startSec ?? 0);
   const [scrubTarget, setScrubTarget] = useState(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [showMarkers, setShowMarkers] = useState(true);
 
   /**
    * Render job state.
@@ -127,10 +132,19 @@ export function ClipEditor({ clipId }) {
   const [job, setJob] = useState(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [vaultItems, setVaultItems] = useState([]);
   const abortExportRef = useRef(null);
 
   // Never leave a render poll running after the editor unmounts.
   useEffect(() => () => abortExportRef.current?.abort(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    clipService.listVault().then((items) => {
+      if (!cancelled) setVaultItems(Array.isArray(items) ? items : []);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   /**
    * Adopt a render that already finished in an earlier session.
@@ -206,6 +220,51 @@ export function ClipEditor({ clipId }) {
     [draftStart, draftEnd]
   );
 
+  const timelineMarkers = useMemo(() => {
+    if (!showMarkers || !draft) return [];
+    const meta = draft.meta || clip?.meta || {};
+    const markers = [];
+    for (const s of (meta.audioSpikes || []).slice(0, 120)) {
+      const t = Number(s?.t);
+      if (Number.isFinite(t)) markers.push({ type: 'spike', t, label: 'Audio spike' });
+    }
+    for (const tRaw of (meta.sceneCuts || []).slice(0, 120)) {
+      const t = Number(tRaw);
+      if (Number.isFinite(t)) markers.push({ type: 'scene', t, label: 'Scene cut' });
+    }
+    for (const d of (meta.deadAirIntervals || []).slice(0, 60)) {
+      const start = Number(d?.startSec ?? d?.start);
+      const end = Number(d?.endSec ?? d?.end);
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+        markers.push({ type: 'dead', t: start, end, label: 'Dead air' });
+      }
+    }
+    for (const s of (meta.sfxMarkers || []).slice(0, 60)) {
+      const t = Number(s?.t);
+      if (Number.isFinite(t)) markers.push({ type: 'sfx', t, label: s?.kind ? `SFX: ${s.kind}` : 'SFX marker' });
+    }
+    return markers;
+  }, [showMarkers, draft, clip]);
+
+  const jumpToNextMarker = () => {
+    const start = draft?.startSec ?? 0;
+    const end = draft?.endSec ?? start;
+    const candidates = timelineMarkers
+      .map((m) => Number(m.t))
+      .filter((t) => Number.isFinite(t) && t >= start && t <= end && t > playhead + 0.2)
+      .sort((a, b) => a - b);
+    if (candidates.length) {
+      seek(candidates[0]);
+      return;
+    }
+    // Wrap to first marker in the selected clip window.
+    const wrap = timelineMarkers
+      .map((m) => Number(m.t))
+      .filter((t) => Number.isFinite(t) && t >= start && t <= end)
+      .sort((a, b) => a - b);
+    if (wrap.length) seek(wrap[0]);
+  };
+
   const onSave = () => {
     const saved = save();
     if (!saved) return;
@@ -274,29 +333,41 @@ export function ClipEditor({ clipId }) {
   );
 
   /** Queue the render and follow it to completion. */
-  const onExport = async () => {
-    // Save first so the render always uses the settings currently on screen.
+  const queueRender = async (overrides = {}) => {
     const saved = save();
     if (!saved || isExporting) return;
+    const exportSettings = { ...saved.export, ...overrides };
 
     setIsExporting(true);
-    setJob({ status: 'queued', progress: 0 });
+    setJob({ status: 'queued', progress: 0, preview: Boolean(exportSettings.preview) });
 
     try {
       const created = await clipService.exportClip(saved.id, {
-        format: saved.export.format,
-        resolution: saved.export.resolution,
+        format: exportSettings.format,
+        resolution: exportSettings.preview ? (exportSettings.resolution === '854x480' ? '854x480' : '480x854') : exportSettings.resolution,
         aspectRatio: saved.aspectRatio,
-        burnCaptions: saved.export.burnCaptions,
+        burnCaptions: exportSettings.burnCaptions,
         captionPresetId: draft.caption?.presetId,
         captionText: draft.caption?.text,
         captionPosition: draft.caption?.position,
+        captionSegments: draft.caption?.segments || undefined,
+        keywordHighlight: Boolean(draft.caption?.keywordHighlight),
+        highlightColor: draft.caption?.highlightColor || undefined,
+        renderMode: exportSettings.renderMode || 'default',
+        backgroundAssetId: exportSettings.backgroundAssetId || undefined,
+        preview: Boolean(exportSettings.preview),
+        watermark: Boolean(exportSettings.watermark || exportSettings.preview),
+        autoZoom: Boolean(exportSettings.autoZoom),
+        deadAirRemoval: Boolean(exportSettings.deadAirRemoval),
+        sfxEnabled: Boolean(exportSettings.sfxEnabled),
+        facecamEnabled: Boolean(exportSettings.facecamEnabled),
+        facecamAssetId: exportSettings.facecamAssetId || undefined,
+        facecamBox: exportSettings.facecamBox || undefined,
+        frameRate: exportSettings.frameRate ? Number(exportSettings.frameRate) : undefined,
       });
 
-      // Mirror the job into the shared store so the Exports page and the
-      // download button stay in step with this editor instance.
-      trackExport({ ...created, clipId: saved.id, title: saved.title });
-      setJob(created);
+      trackExport({ ...created, clipId: saved.id, title: saved.title, preview: Boolean(exportSettings.preview) });
+      setJob({ ...created, preview: Boolean(exportSettings.preview) });
       watchExport(created.jobId);
     } catch (error) {
       setIsExporting(false);
@@ -304,6 +375,11 @@ export function ClipEditor({ clipId }) {
       toast.error('Could not queue the render', { body: error.message });
     }
   };
+
+  const onExport = () => queueRender({ preview: false, watermark: Boolean(draft?.export?.watermark) });
+  const onExportPreview = () => queueRender({ preview: true, watermark: true });
+  const onApproveHD = () => queueRender({ preview: false, watermark: Boolean(draft?.export?.watermark), resolution: '1080x1920' });
+  const onRerenderCaptions = () => queueRender({ captionOnly: true, burnCaptions: true, preview: Boolean(job?.preview) });
 
   /** Stop a queued or running render. */
   const onCancelExport = useCallback(async () => {
@@ -484,12 +560,33 @@ export function ClipEditor({ clipId }) {
           </Panel>
 
           <Panel>
-            <div className="px-4 pt-4 pb-4 sm:px-5 sm:pb-5">
+            <div className="px-4 pt-4 pb-4 sm:px-5 sm:pb-5 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-line px-2 py-1 text-[11px] text-secondary hover:text-primary"
+                  onClick={() => setShowMarkers((v) => !v)}
+                >
+                  {showMarkers ? 'Hide' : 'Show'} analysis markers
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-line px-2 py-1 text-[11px] text-secondary hover:text-primary"
+                  onClick={jumpToNextMarker}
+                  disabled={!timelineMarkers.length}
+                >
+                  Jump to next highlight
+                </button>
+                <span className="text-[11px] text-faint">
+                  {timelineMarkers.length ? `${timelineMarkers.length} markers (spikes/cuts/dead-air/sfx)` : 'No analysis markers yet'}
+                </span>
+              </div>
               <ClipTimeline
                 startSec={draft.startSec}
                 endSec={draft.endSec}
                 sourceDuration={bounds.sourceDuration}
                 playheadSec={playhead}
+                markers={showMarkers ? timelineMarkers : []}
                 onChange={setTrim}
                 onScrub={seek}
               />
@@ -561,12 +658,45 @@ export function ClipEditor({ clipId }) {
                 />
               </div>
 
-              <div className="flex items-center gap-2 rounded-lg border border-line bg-ink-900/60 px-3 py-2.5">
-                <Sparkles aria-hidden className="size-3.5 shrink-0 text-brand-400" />
-                <p className="text-[11.5px] leading-relaxed text-secondary">
-                  Hook score <span className="font-semibold text-primary">{clip.score}</span> from the
-                  highlight model.
-                </p>
+              <div className="space-y-3 rounded-lg border border-line bg-ink-900/60 px-3 py-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles aria-hidden className="size-3.5 shrink-0 text-brand-400" />
+                  <p className="text-[11.5px] leading-relaxed text-secondary">
+                    Hook score <span className="font-semibold text-primary">{clip.score}</span>
+                    {' · '}Virality <span className="font-semibold text-primary">{draft.viralScore ?? clip.viralScore ?? clip.score}</span>
+                  </p>
+                </div>
+                {Boolean((draft.meta || clip.meta)?.audioSpikes?.length || (draft.meta || clip.meta)?.sceneCuts?.length || (draft.meta || clip.meta)?.sfxMarkers?.length) && (
+                  <p className="text-[11px] text-faint">
+                    Attractive signals: {(draft.meta || clip.meta)?.audioSpikes?.length || 0} spikes, {(draft.meta || clip.meta)?.sceneCuts?.length || 0} scene cuts, {(draft.meta || clip.meta)?.sfxMarkers?.length || 0} SFX markers.
+                  </p>
+                )}
+                <TextField
+                  label="Hook banner"
+                  value={draft.hookBanner ?? ''}
+                  onChange={(e) => setMeta({ hookBanner: e.target.value })}
+                  placeholder="2-5 word top banner"
+                />
+                <TextField
+                  label="Hashtags"
+                  value={(draft.hashtags || []).join(' ')}
+                  onChange={(e) => setMeta({ hashtags: e.target.value.split(/\s+/).map((t) => t.trim()).filter(Boolean) })}
+                  placeholder="#shorts #podcast"
+                />
+                <TextArea
+                  label="Description"
+                  rows={3}
+                  value={draft.description ?? ''}
+                  onChange={(e) => setMeta({ description: e.target.value })}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button size="xs" variant="secondary" onClick={() => navigator.clipboard?.writeText((draft.hashtags || []).join(' '))}>
+                    <Copy aria-hidden className="size-3" />Copy hashtags
+                  </Button>
+                  <Button size="xs" variant="secondary" onClick={() => navigator.clipboard?.writeText(draft.description || '')}>
+                    <Copy aria-hidden className="size-3" />Copy description
+                  </Button>
+                </div>
               </div>
             </div>
           </Panel>
@@ -576,13 +706,42 @@ export function ClipEditor({ clipId }) {
             <div className="px-4 pb-4 sm:px-5 sm:pb-5">
               <CaptionEditor
                 caption={draft.caption?.text ?? ''}
+                captionSettings={draft.caption}
                 presetId={draft.caption?.presetId}
                 onChangeText={setCaptionText}
                 onChangePreset={setCaptionPreset}
+                onChangeCaption={setCaptionSettings}
                 originalText={clip.caption?.text ?? ''}
                 position={draft.caption?.position ?? preset?.style?.position ?? 'lower'}
                 onChangePosition={setCaptionPosition}
+                segments={draft.caption?.segments ?? []}
+                onChangeSegments={setCaptionSegments}
+                clipStartSec={draft.startSec}
+                clipEndSec={draft.endSec}
               />
+
+              {(draft.export?.renderMode === 'split_screen' || project?.presetId === 'split_screen') && (
+                <div className="rounded-lg border border-line bg-ink-900/40 p-3 space-y-2">
+                  <p className="text-[12px] font-semibold text-secondary uppercase tracking-wide">1-click background swap</p>
+                  <p className="text-[11px] text-faint">Swaps gameplay background for export only; no reanalysis needed. Save to persist.</p>
+                  <div className="flex flex-wrap gap-2">
+                    {vaultItems.slice(0, 8).map((item) => {
+                      const active = draft.export?.backgroundAssetId === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setExportSettings({ renderMode: 'split_screen', backgroundAssetId: item.id })}
+                          className={`rounded-md border px-2 py-1 text-[11px] ${active ? 'border-brand-400 bg-brand-500/15 text-brand-200' : 'border-line text-secondary hover:text-primary'}`}
+                        >
+                          {item.title || item.id}
+                        </button>
+                      );
+                    })}
+                    {!vaultItems.length && <span className="text-[11px] text-faint">No vault assets configured.</span>}
+                  </div>
+                </div>
+              )}
             </div>
           </Panel>
 
@@ -610,11 +769,13 @@ export function ClipEditor({ clipId }) {
             settings={draft.export}
             onChange={setExportSettings}
             onExport={onExport}
+            onExportPreview={onExportPreview}
             onDownloadCaptions={onDownloadCaptions}
             onDownloadTranscript={onDownloadTranscript}
             onDownloadProject={onDownloadProject}
             isExporting={isExporting}
             canExport={canExport}
+            vaultItems={vaultItems}
           />
 
           {/* Live render state, driven by the server's job resource. */}
@@ -633,10 +794,20 @@ export function ClipEditor({ clipId }) {
                 }
                 actions={
                   job.status === 'complete' ? (
-                    <Button size="xs" loading={isDownloading} onClick={onDownloadVideo}>
-                      <Download aria-hidden className="size-3.5" />
-                      Download
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button size="xs" variant="ghost" onClick={onRerenderCaptions} disabled={isExporting}>
+                        Re-render captions
+                      </Button>
+                      {job.preview && (
+                        <Button size="xs" variant="secondary" onClick={onApproveHD} disabled={isExporting}>
+                          Approve & Export HD
+                        </Button>
+                      )}
+                      <Button size="xs" loading={isDownloading} onClick={onDownloadVideo}>
+                        <Download aria-hidden className="size-3.5" />
+                        Download
+                      </Button>
+                    </div>
                   ) : isExporting ? (
                     <Button size="xs" variant="ghost" onClick={onCancelExport}>
                       Cancel
@@ -662,7 +833,8 @@ export function ClipEditor({ clipId }) {
                     {job.status === 'complete' ? (
                       <>
                         <Check aria-hidden className="size-3 text-success" />
-                        {job.sizeBytes ? `${Math.round(job.sizeBytes / 1024)} KB` : 'Ready'}
+                        {job.preview ? 'Preview ready' : 'HD render ready'}
+                        {job.sizeBytes ? ` · ${Math.round(job.sizeBytes / 1024)} KB` : ''}
                         {job.durationSec ? ` · ${formatClock(job.durationSec)}` : ''}
                       </>
                     ) : (

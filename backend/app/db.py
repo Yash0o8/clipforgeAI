@@ -52,6 +52,7 @@ class Project(Base):
     id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
     source = Column(String, nullable=False, default="upload")
+    source_url = Column(Text)
 
     file_name = Column(String)
     file_size = Column(Integer)
@@ -79,6 +80,9 @@ class Project(Base):
     # JSON-encoded stages[] so the Processing page stepper has something to
     # render on the very first poll, before any work starts.
     stages_json = Column(Text, default="[]")
+    # User-selected creation preset/mode and project-level settings.
+    preset_id = Column(String, default="podcast")
+    settings_json = Column(Text, default="{}")
 
     clips = relationship(
         "Clip",
@@ -93,10 +97,12 @@ class Project(Base):
         # frontend a URL for a project with no upload makes <video> request a
         # 404 and sit on a broken player with no explanation.
         has_media = bool(self.asset_path)
+        settings = json.loads(self.settings_json or "{}")
         return {
             "id": self.id,
             "title": self.title,
             "source": self.source,
+            "sourceUrl": self.source_url,
             "fileName": self.file_name,
             "fileSize": self.file_size,
             "mimeType": self.mime_type,
@@ -116,6 +122,8 @@ class Project(Base):
             # support, not a JSON resource.
             "objectUrl": f"/media/{self.id}" if has_media else None,
             "hasLocalSource": has_media,
+            "presetId": self.preset_id or "podcast",
+            "settings": settings,
         }
 
 
@@ -133,6 +141,7 @@ class Clip(Base):
     duration_sec = Column(Float, default=0.0)
 
     score = Column(Integer, default=0)
+    viral_score = Column(Integer, default=0)
     aspect_ratio = Column(String, nullable=False, default="9:16")
     status = Column(String, nullable=False, default="suggested")
     poster_seed = Column(Integer, default=0)
@@ -145,21 +154,25 @@ class Clip(Base):
     transcript_json = Column(Text, default="[]")
     caption_json = Column(Text, default="{}")
     export_json = Column(Text, default="{}")
+    meta_json = Column(Text, default="{}")
 
     project = relationship("Project", back_populates="clips")
 
     def to_dict(self) -> dict:
         caption = json.loads(self.caption_json or "{}")
         export = json.loads(self.export_json or "{}")
+        meta = json.loads(self.meta_json or "{}")
         return {
             "id": self.id,
             "projectId": self.project_id,
             "title": self.title,
             "hook": self.hook,
+            "hookBanner": meta.get("hookBanner"),
             "startSec": self.start_sec,
             "endSec": self.end_sec,
             "durationSec": self.duration_sec,
             "score": self.score,
+            "viralScore": self.viral_score or self.score,
             "aspectRatio": self.aspect_ratio,
             "status": self.status,
             "posterSeed": self.poster_seed,
@@ -169,6 +182,10 @@ class Clip(Base):
             # position may legitimately be null, meaning "inherit the preset".
             "caption": caption,
             "export": export,
+            "keywords": meta.get("keywords", []),
+            "hashtags": meta.get("hashtags", []),
+            "description": meta.get("description", ""),
+            "meta": meta,
         }
 
 
@@ -211,6 +228,7 @@ class ExportJob(Base):
         stream_url = (
             f"{settings.api_prefix}/exports/{self.id}/stream" if self.render_path else None
         )
+        job_settings = json.loads(self.settings_json or {})
 
         return {
             "id": self.id,
@@ -227,7 +245,11 @@ class ExportJob(Base):
             "burnCaptions": self.burn_captions,
             "createdAt": iso(self.created_at),
             "updatedAt": iso(self.updated_at),
-            "settings": json.loads(self.settings_json or "{}"),
+            "settings": job_settings,
+            "renderMode": job_settings.get("renderMode", "default"),
+            "presetId": job_settings.get("presetId"),
+            "backgroundAssetId": job_settings.get("backgroundAssetId"),
+            "preview": bool(job_settings.get("preview")),
             "sizeBytes": self.size_bytes,
             "hasDownload": self.render_path is not None,
             "renderPath": self.render_path,
@@ -279,6 +301,40 @@ _engine = None
 _SessionLocal = None
 
 
+def _ensure_sqlite_columns(engine) -> None:
+    """Best-effort additive migrations for SQLite dev databases.
+
+    The project uses `create_all()` without Alembic. That creates missing tables
+    but does not add columns to existing ones, so we patch in newly introduced
+    nullable/defaulted columns to keep local upgrades working.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+
+    additions = {
+        "projects": {
+            "source_url": "TEXT",
+            "preset_id": "VARCHAR DEFAULT 'podcast'",
+            "settings_json": "TEXT DEFAULT '{}'",
+        },
+        "clips": {
+            "viral_score": "INTEGER DEFAULT 0",
+            "meta_json": "TEXT DEFAULT '{}'",
+        },
+    }
+
+    with engine.begin() as conn:
+        for table, columns in additions.items():
+            rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            if not rows:
+                continue
+            existing = {row[1] for row in rows}
+            for column, ddl in columns.items():
+                if column in existing:
+                    continue
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def init_engine():
     """Create the engine and tables once per process."""
     global _engine, _SessionLocal
@@ -291,6 +347,7 @@ def init_engine():
         future=True,
     )
     Base.metadata.create_all(_engine)
+    _ensure_sqlite_columns(_engine)
     _SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
     return _engine
 

@@ -207,6 +207,13 @@ def transcribe(
     if samples.size == 0:
         raise TranscriptionError("the file contains no audio track to transcribe")
 
+    initial_prompt = getattr(settings, "whisper_initial_prompt", None)
+    project_hint = (getattr(settings, "transcription_hint", "") or "").strip().lower()
+    if project_hint in {"hinglish", "roman", "hinglish_roman"}:
+        initial_prompt = (
+            "Transcribe Hindi and English mixed speech as Roman Hinglish. "
+            "Use Latin letters, preserve code-switching, and keep common words like bhai, yaar, scene, kya, matlab, seriously, bro."
+        )
     try:
         raw_segments, info = model.transcribe(
             samples,  # a numpy array skips faster-whisper's PyAV decoding
@@ -215,6 +222,7 @@ def transcribe(
             vad_parameters={"min_silence_duration_ms": 500},
             beam_size=5,
             language=settings.whisper_language,
+            initial_prompt=initial_prompt,
         )
     except TranscriptionError:
         raise

@@ -46,7 +46,11 @@ __pycache__/
 venv/
 
 # Backend runtime data: uploads, media, renders, SQLite database
-backend/data/
+backend/data/*
+!backend/data/vault/
+backend/data/vault/*
+!backend/data/vault/manifest.json
+!backend/data/vault/README.md
 *.sqlite3
 *.db
 

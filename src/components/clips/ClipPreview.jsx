@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Captions, Film, Pause, Play } from 'lucide-react';
+import { Captions, Film, Pause, Play, Volume2, VolumeX } from 'lucide-react';
 import { CAPTION_PRESET_MAP } from '../../utils/constants.js';
 import { formatClock } from '../../utils/formatDuration.js';
 
@@ -60,9 +60,10 @@ function useCaptionWords(clip, captionText) {
 
     return tokens.map((token, index) => {
       const share = (token.length / totalChars) * span;
-      const word = { text: token, startSec: cursor, endSec: cursor + share };
-      cursor += share;
-      return index === tokens.length - 1 ? { ...word, endSec: end } : word;
+      const wordStart = cursor;
+      const wordEnd = index === tokens.length - 1 ? end : Math.min(end, cursor + share);
+      cursor = wordEnd;
+      return { text: token, startSec: wordStart, endSec: Math.max(wordStart + 0.03, wordEnd) };
     });
   }, [clip?.startSec, clip?.endSec, clip?.transcript, captionText]);
 }
@@ -111,7 +112,7 @@ function PosterFrame({ seed, label, sublabel, aspectValue }) {
  * Caption overlay rendered inside the preview frame.
  * Renders nothing when the caption text is empty.
  */
-function CaptionOverlay({ clip, preset, captionText, currentTime, frameWidth }) {
+function CaptionOverlay({ clip, preset, captionText, caption, currentTime, frameWidth }) {
   const words = useCaptionWords(clip, captionText);
   const style = preset?.style ?? CAPTION_PRESET_MAP.clean.style;
 
@@ -134,7 +135,7 @@ function CaptionOverlay({ clip, preset, captionText, currentTime, frameWidth }) 
   const anchor =
     style.position === 'top'
       ? 'items-start pt-[12%]'
-      : style.position === 'center'
+      : style.position === 'center' || style.position === 'divider'
         ? 'items-center'
         : 'items-end pb-[13%]';
 
@@ -143,20 +144,63 @@ function CaptionOverlay({ clip, preset, captionText, currentTime, frameWidth }) 
     ? words.findIndex((word) => currentTime >= word.startSec && currentTime < word.endSec)
     : -1;
 
+  const keywordSet = new Set(
+    (clip?.keywords || clip?.meta?.keywords || [])
+      .map((k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, ''))
+      .filter(Boolean)
+  );
+  const keywordHighlight = caption?.keywordHighlight ?? clip?.caption?.keywordHighlight ?? false;
+  const highlightColor = caption?.highlightColor || style.highlight || '#fde68a';
+
+  const renderHighlightedText = (text) =>
+    text.split(/(\s+)/).map((part, i) => {
+      if (!part.trim()) return <span key={i}>{part}</span>;
+      const norm = part.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const isKeyword = keywordHighlight && norm && keywordSet.has(norm);
+      return (
+        <span
+          key={i}
+          style={
+            isKeyword
+              ? {
+                  color: highlightColor,
+                  textShadow: `0 0 18px ${highlightColor}`,
+                  display: 'inline-block',
+                  transform: preset?.id === 'hormozi' ? 'scale(1.06)' : undefined,
+                }
+              : undefined
+          }
+        >
+          {part}
+        </span>
+      );
+    });
+
+  const hormoziPop = preset?.id === 'hormozi';
+
   return (
     <div className={`pointer-events-none absolute inset-0 flex justify-center px-4 ${anchor}`}>
       {style.karaoke ? (
         <p className="inline max-w-full" style={shared}>
           {words.map((word, index) => {
             const active = index === activeIndex;
+            const norm = word.text.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const isKeyword = keywordHighlight && norm && keywordSet.has(norm);
+            const activeColor = style.highlight || highlightColor;
             return (
               <span
                 key={`${word.text}-${index}`}
-                className="transition-colors duration-100"
+                className="transition-all duration-100"
                 style={{
-                  color: active ? style.highlight : style.color,
-                  textShadow: active ? `0 0 16px ${style.highlight}` : shared.textShadow,
-                  opacity: active || activeIndex === -1 ? 1 : 0.75,
+                  color: active ? activeColor : isKeyword ? highlightColor : style.color,
+                  textShadow: active
+                    ? `0 0 18px ${activeColor}, 0 2px 10px rgba(0,0,0,0.6)`
+                    : isKeyword
+                      ? `0 0 12px ${highlightColor}`
+                      : shared.textShadow,
+                  opacity: active || activeIndex === -1 ? 1 : 0.72,
+                  display: 'inline-block',
+                  transform: active && hormoziPop ? 'scale(1.08) translateY(-1px)' : 'scale(1)',
                 }}
               >
                 {word.text}
@@ -167,7 +211,7 @@ function CaptionOverlay({ clip, preset, captionText, currentTime, frameWidth }) 
         </p>
       ) : (
         <p className="inline max-w-full" style={shared}>
-          {captionText}
+          {renderHighlightedText(captionText)}
         </p>
       )}
     </div>
@@ -217,6 +261,7 @@ export function ClipPreview({
   const containerRef = useRef(null);
   const videoRef = useRef(null);
   const { width, height } = useElementSize(containerRef);
+  const [muted, setMuted] = useState(false);
 
   const aspectValue = clip?.aspectRatio === '1:1' ? 1 : clip?.aspectRatio === '16:9' ? 16 / 9 : 9 / 16;
 
@@ -270,14 +315,15 @@ export function ClipPreview({
 
   /* --- Autoplay on open --------------------------------------------------- */
   // The ref guards against re-announcing on every clip change: this is a
-  // once-per-mount preference, not a reaction to props. Playback is muted, so
-  // browsers allow it without a gesture.
+  // once-per-mount preference. Autoplay starts muted to satisfy browser policy.
   const autoplayedRef = useRef(false);
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !hasSource || !autoPlay || autoplayedRef.current) return;
     autoplayedRef.current = true;
     video.currentTime = Math.max(0, windowStart);
+    video.muted = true;
+    setMuted(true);
     video.play().then(() => onPlayingChange?.(true)).catch(() => {});
   }, [hasSource, autoPlay, windowStart, onPlayingChange]);
 
@@ -310,15 +356,26 @@ export function ClipPreview({
           style={{ width: frameWidth, height: frameHeight }}
         >
           {hasSource ? (
-            <video
-              ref={videoRef}
-              src={sourceUrl}
-              muted
-              playsInline
-              preload="metadata"
-              className="absolute inset-0 size-full cursor-pointer object-contain"
-              aria-label={`Preview of ${clip?.title ?? 'clip'}`}
-            />
+            <>
+              <video
+                ref={videoRef}
+                src={sourceUrl}
+                playsInline
+                preload="metadata"
+                muted={muted}
+                className="absolute inset-0 size-full cursor-pointer object-contain"
+                aria-label={`Preview of ${clip?.title ?? 'clip'}`}
+              />
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
+                className="absolute right-2 bottom-2 z-20 rounded-md bg-black/55 p-1.5 text-white/90 hover:bg-black/70"
+                aria-label={muted ? 'Unmute preview' : 'Mute preview'}
+                title={muted ? 'Unmute' : 'Mute'}
+              >
+                {muted ? <VolumeX aria-hidden className="size-4" /> : <Volume2 aria-hidden className="size-4" />}
+              </button>
+            </>
           ) : (
             <PosterFrame
               seed={clip?.posterSeed ?? 0}
@@ -332,10 +389,19 @@ export function ClipPreview({
             <CaptionOverlay
               clip={clip}
               preset={preset}
+              caption={clip?.caption}
               captionText={captionText ?? clip?.caption?.text}
               currentTime={currentTime}
               frameWidth={frameWidth}
             />
+          )}
+
+          {(clip?.hookBanner || clip?.hook) && (currentTime - (clip?.startSec ?? 0)) <= 3 && (
+            <div className="pointer-events-none absolute inset-x-0 top-[6%] z-20 flex justify-center px-4">
+              <span className="rounded-md bg-black/55 px-3 py-1.5 text-center text-[11px] font-extrabold tracking-wide text-white uppercase shadow-[0_2px_12px_rgba(0,0,0,0.45)]">
+                {clip.hookBanner || clip.hook}
+              </span>
+            </div>
           )}
 
           {/* Duration chip, bottom-left. */}

@@ -35,6 +35,7 @@ from .rank import rank_candidates
 from .render import render_clip
 from .score import Candidate, top_candidates
 from .transcribe import TranscriptionError, transcribe
+from .analysis import detect_audio_spikes, detect_dead_air_intervals, detect_face_tracks, detect_scene_cuts
 
 logger = logging.getLogger(__name__)
 
@@ -128,28 +129,34 @@ def build_clips(
     candidates: Sequence[Candidate],
     transcript: list[Segment],
     project_id: str,
+    *,
+    project_preset: str | None = None,
+    project_settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Turn ranked candidates into clip rows.
+    """Turn ranked candidates into clip rows."""
+    project_settings = project_settings or {}
+    preset = (project_preset or "podcast").strip().lower()
+    render_mode = project_settings.get("renderMode") or (
+        "split_screen" if preset == "split_screen" else "gaming" if preset == "gaming" else "default"
+    )
+    default_caption = project_settings.get("captionPreset")
+    if not default_caption:
+        default_caption = "split_center" if preset == "split_screen" else "hormozi" if preset == "podcast" else "bold"
 
-    Each clip carries only the transcript segments inside its own window, so
-    ``ClipEditor``'s transcript panel and the karaoke overlay never show words
-    outside the trim range.
-    """
-    from .captions import DEFAULT_PRESET
-
-    # Presets cycle across a project's clips so the grid shows variety, matching
-    # what the demo fixtures did. A user can change any of it in the editor.
-    preset_ids = ("clean", "bold", "karaoke", "minimal", "creator")
+    preset_cycle = {
+        "podcast": ("hormozi", "bold", "clean", "creator", "minimal"),
+        "split_screen": ("split_center", "hormozi", "bold", "clean", "creator"),
+        "gaming": ("bold", "hormozi", "clean", "creator", "minimal"),
+    }.get(preset, ("hormozi", "bold", "karaoke", "split_center", "creator"))
 
     results: list[dict[str, Any]] = []
     for index, candidate in enumerate(candidates):
         window = segments_for_window(transcript, candidate.start_sec, candidate.end_sec)
         end_sec = candidate.end_sec
         duration = round(end_sec - candidate.start_sec, 2)
-
-        # Poster colour is derived from the clip's own window, so re-running the
-        # pipeline on the same source gives the same clip the same colour.
         seed = stable_hash(f"{project_id}:{candidate.start_sec:.1f}:{candidate.end_sec:.1f}", 360)
+        viral = int(getattr(candidate, "viral_score", 0) or round(candidate.score))
+        caption_preset = preset_cycle[index % len(preset_cycle)] if index else default_caption
 
         results.append(
             {
@@ -161,21 +168,42 @@ def build_clips(
                 "end_sec": round(end_sec, 2),
                 "duration_sec": duration,
                 "score": int(round(min(99, max(0, candidate.score)))),
+                "viral_score": max(0, min(100, viral)),
                 "aspect_ratio": "9:16",
                 "status": "suggested",
                 "poster_seed": seed,
                 "transcript_json": json.dumps([segment.to_dict() for segment in window]),
-                # Caption defaults are deliberately minimal: a preset, the derived
-                # line, and a null position so the preset's own anchor applies.
                 "caption_json": json.dumps(
                     {
                         "text": candidate.caption,
-                        "presetId": preset_ids[index % len(preset_ids)],
-                        "position": None,
+                        "presetId": caption_preset,
+                        "position": "divider" if caption_preset == "split_center" or render_mode == "split_screen" else None,
+                        "keywordHighlight": True,
                     }
                 ),
                 "export_json": json.dumps(
-                    {"format": "mp4", "resolution": "1080x1920", "burnCaptions": True, "lastExportedAt": None}
+                    {
+                        "format": "mp4",
+                        "resolution": "1080x1920",
+                        "burnCaptions": True,
+                        "renderMode": render_mode,
+                        "backgroundAssetId": project_settings.get("backgroundAssetId"),
+                        "preview": False,
+                        "watermark": False,
+                        "lastExportedAt": None,
+                    }
+                ),
+                "meta_json": json.dumps(
+                    {
+                        "viralScore": max(0, min(100, viral)),
+                        "hookBanner": getattr(candidate, "hook_banner", "") or candidate.hook,
+                        "keywords": getattr(candidate, "keywords", []) or [],
+                        "hashtags": getattr(candidate, "hashtags", []) or [],
+                        "description": getattr(candidate, "description", "") or candidate.hook,
+                        "reason": candidate.components.get("reason", "") if isinstance(candidate.components, dict) else "",
+                        "projectPreset": preset,
+                        "renderMode": render_mode,
+                    }
                 ),
                 "created_at": utcnow(),
             }
@@ -311,9 +339,17 @@ def run_processing(
         except Exception:
             pass
 
+        run_settings = settings
+        project_settings = json.loads(project.settings_json or "{}")
+        transcription_hint = project_settings.get("transcriptionHint") or project_settings.get("transcription_hint")
+        if transcription_hint:
+            try:
+                run_settings = settings.model_copy(update={"transcription_hint": str(transcription_hint)})
+            except Exception:
+                run_settings = settings
         segments, meta = transcribe(
             temp_audio,
-            settings,
+            run_settings,
             on_progress=on_transcribed,
             cancel=context.should_cancel,
         )
@@ -337,6 +373,28 @@ def run_processing(
             meta["language"],
         )
 
+        # Optional mode analysis (best-effort, dependency-gated).
+        preset = (project.preset_id or "podcast").lower()
+        analysis: dict[str, Any] = {}
+        try:
+            if preset in ("podcast", "gaming") and settings.enable_face_tracking:
+                analysis["faceTracks"] = detect_face_tracks(source, sample_fps=settings.face_tracking_sample_fps)
+            # Audio spikes are cheap and useful for all modes.
+            if settings.enable_audio_spike_detection:
+                analysis["audioSpikes"] = detect_audio_spikes(source)
+            # Scene cuts help podcast punch-ins and gaming/split action selection.
+            if settings.enable_scene_cut_detection and preset in ("podcast", "gaming", "split_screen"):
+                analysis["sceneCuts"] = detect_scene_cuts(source)
+            # Dead-air removal is most useful for podcast/gaming pacing.
+            if settings.enable_dead_air_removal and preset in ("podcast", "gaming"):
+                analysis["deadAirIntervals"] = detect_dead_air_intervals(source)
+        except Exception:
+            logger.exception("optional analysis failed for project %s", project_id)
+        if analysis:
+            project_settings.update(analysis)
+            project.settings_json = json.dumps(project_settings)
+            session.commit()
+
         # --- Stage 4: highlights -------------------------------------------
         tracker.start("highlights")
         _apply_stage(session, project, job, tracker, "highlights")
@@ -347,6 +405,9 @@ def run_processing(
             count=settings.shortlist_size,
             min_duration=min_duration,
             max_duration=max_duration,
+            audio_spikes=project_settings.get("audioSpikes"),
+            scene_cuts=project_settings.get("sceneCuts"),
+            face_tracks=project_settings.get("faceTracks"),
         )
         context.check_cancelled()
 
@@ -370,7 +431,23 @@ def run_processing(
         tracker.start("prepare")
         _apply_stage(session, project, job, tracker, "prepare")
 
-        payloads = build_clips(ranked, segments, project_id)
+        payloads = build_clips(
+            ranked,
+            segments,
+            project_id,
+            project_preset=project.preset_id,
+            project_settings=project_settings,
+        )
+        for payload in payloads:
+            meta_json = json.loads(payload.get("meta_json") or "{}")
+            for k in ("faceTracks", "audioSpikes", "sceneCuts", "deadAirIntervals"):
+                if k in project_settings:
+                    meta_json[k] = project_settings[k]
+            # Best-effort SFX hooks from spikes/keywords for downstream editors.
+            spikes = meta_json.get("audioSpikes") or []
+            if isinstance(spikes, list) and spikes:
+                meta_json.setdefault("sfxMarkers", [{"t": s.get("t"), "type": "impact"} for s in spikes[:12] if isinstance(s, dict)])
+            payload["meta_json"] = json.dumps(meta_json)
         _persist_clips(session, project, payloads)
 
     except CancelledError:

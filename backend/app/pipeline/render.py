@@ -23,14 +23,14 @@ import logging
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from ..config import get_settings
 from ..storage import kill_after, terminate_process
 from .captions import CaptionStyle, build_style, escape_text
-from .subtitles import CaptionCue, build_ass, cues_for_window, resolve_caption_text
+from .subtitles import CaptionCue, WordCue, build_ass, cues_for_window, resolve_caption_text
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,29 @@ class RenderRequest:
     caption_preset_id: str | None = "clean"
     caption_position: str | None = None
     caption_text: str | None = None
+    caption_segments: list[dict[str, Any]] | None = None
     # Transcript segments for the clip window, needed for karaoke word timings.
     transcript: list[dict[str, Any]] | None = None
+    render_mode: str = "default"
+    background_source: Path | None = None
+    watermark_text: str | None = None
+    hook_banner: str | None = None
+    preview: bool = False
+    keyword_highlight: bool = False
+    highlight_color: str | None = None
+    keywords: list[str] = field(default_factory=list)
+    auto_zoom: bool = False
+    dead_air_removal: bool = False
+    sfx_enabled: bool = False
+    facecam_enabled: bool = False
+    facecam_source: Path | None = None
+    facecam_box: dict[str, float] | None = None
+    face_tracks: list[dict[str, Any]] = field(default_factory=list)
+    audio_spikes: list[dict[str, Any]] = field(default_factory=list)
+    scene_cuts: list[float] = field(default_factory=list)
+    dead_air_intervals: list[dict[str, float]] = field(default_factory=list)
+    sfx_markers: list[dict[str, Any]] = field(default_factory=list)
+    frame_rate: int | None = None
 
     @property
     def duration(self) -> float:
@@ -79,6 +100,253 @@ def _scale_pad_filter(width: int, height: int) -> str:
     )
 
 
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def _zoom_expr(request: RenderRequest) -> float:
+    """Legacy static zoom factor (1.0-1.12), biased by spikes/scene cuts."""
+    if not request.auto_zoom:
+        return 1.0
+    base = 1.04 if request.render_mode == "podcast" else 1.02
+    spikes = [float(s.get("t", 0)) for s in (request.audio_spikes or []) if isinstance(s, dict)]
+    cuts = [float(c) for c in (request.scene_cuts or []) if isinstance(c, (int, float, str))]
+    bump = 0.0
+    for t in spikes:
+        rt = t - request.start_sec
+        if 0 <= rt <= request.duration:
+            bump = max(bump, 0.05)
+    for c in cuts:
+        rc = c - request.start_sec
+        if 0 <= rc <= request.duration:
+            bump = max(bump, 0.03)
+    return _clamp(base + bump, 1.0, 1.12)
+
+
+def _auto_zoom_timeline(request: RenderRequest) -> list[tuple[float, float, float]]:
+    """Build (start,end,zoom) windows in clip-relative seconds."""
+    if not request.auto_zoom:
+        return [(0.0, max(0.1, request.duration), 1.0)]
+
+    dur = max(0.1, request.duration)
+    base = 1.03 if request.render_mode == "podcast" else 1.015
+    max_zoom = 1.12 if request.render_mode in ("podcast", "gaming") else 1.08
+    points: list[tuple[float, float]] = []
+
+    for s in request.audio_spikes or []:
+        if isinstance(s, dict):
+            try:
+                t = float(s.get("t", 0.0)) - request.start_sec
+                strength = float(s.get("strength", 0.0) or 0.0)
+            except Exception:
+                continue
+            if 0 <= t <= dur:
+                points.append((t, 0.06 + min(0.04, strength / 20.0)))
+    for c in request.scene_cuts or []:
+        try:
+            t = float(c) - request.start_sec
+        except Exception:
+            continue
+        if 0 <= t <= dur:
+            points.append((t, 0.04))
+    for m in request.sfx_markers or []:
+        if isinstance(m, dict):
+            try:
+                t = float(m.get("t", 0.0)) - request.start_sec
+            except Exception:
+                continue
+            if 0 <= t <= dur:
+                points.append((t, 0.03))
+
+    if not points:
+        return [(0.0, dur, base)]
+
+    # Merge overlapping punch-in windows.
+    windows: list[tuple[float, float, float]] = []
+    for t, bump in sorted(points, key=lambda x: x[0]):
+        start = _clamp(t - 0.35, 0.0, dur)
+        end = _clamp(t + 0.95, 0.0, dur)
+        zoom = _clamp(base + bump, 1.0, max_zoom)
+        if not windows or start > windows[-1][1] + 0.15:
+            windows.append((start, end, zoom))
+        else:
+            ps, pe, pz = windows[-1]
+            windows[-1] = (ps, max(pe, end), max(pz, zoom))
+
+    # Fill gaps with base zoom.
+    timeline: list[tuple[float, float, float]] = []
+    cursor = 0.0
+    for s, e, z in windows:
+        if s > cursor:
+            timeline.append((cursor, s, base))
+        timeline.append((s, e, z))
+        cursor = e
+    if cursor < dur:
+        timeline.append((cursor, dur, base))
+    return timeline
+
+
+def _zoom_expr_for_timeline(timeline: list[tuple[float, float, float]], default_zoom: float) -> str:
+    expr = f"{default_zoom:.4f}"
+    for s, e, z in reversed(timeline):
+        expr = f"if(between(t,{s:.3f},{e:.3f}),{z:.4f},{expr})"
+    return expr
+
+
+def _keep_intervals(request: RenderRequest) -> list[tuple[float, float]]:
+    """Clip-relative keep intervals after dead-air removal."""
+    start = 0.0
+    end = request.duration
+    if not request.dead_air_removal or not request.dead_air_intervals:
+        return [(start, end)]
+
+    cuts: list[tuple[float, float]] = []
+    for it in request.dead_air_intervals:
+        if not isinstance(it, dict):
+            continue
+        try:
+            s = float(it.get("startSec", it.get("start", 0.0))) - request.start_sec
+            e = float(it.get("endSec", it.get("end", 0.0))) - request.start_sec
+        except Exception:
+            continue
+        s = _clamp(s, start, end)
+        e = _clamp(e, start, end)
+        if e - s >= 0.35:
+            cuts.append((s, e))
+    cuts.sort()
+    merged: list[tuple[float, float]] = []
+    for s, e in cuts:
+        if not merged or s > merged[-1][1]:
+            merged.append((s, e))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+
+    keeps: list[tuple[float, float]] = []
+    cur = start
+    for s, e in merged:
+        if s - cur >= 0.25:
+            keeps.append((cur, s))
+        cur = max(cur, e)
+    if end - cur >= 0.25:
+        keeps.append((cur, end))
+    if not keeps:
+        return [(start, end)]
+    # Avoid over-aggressive trimming; keep original if too much removed.
+    kept = sum(e - s for s, e in keeps)
+    if kept < request.duration * 0.45:
+        return [(start, end)]
+    return keeps
+
+
+def _remap_time_for_keep(t: float, keeps: list[tuple[float, float]]) -> float | None:
+    out = 0.0
+    for s, e in keeps:
+        if t < s:
+            return None
+        if s <= t <= e:
+            return out + (t - s)
+        out += e - s
+    return None
+
+
+def _face_position_expr(request: RenderRequest, axis: str, default: float) -> str:
+    """Build a piecewise-constant ffmpeg expression for face center over time."""
+    tracks = []
+    for t in request.face_tracks or []:
+        if not isinstance(t, dict):
+            continue
+        try:
+            ts = float(t.get("t", 0.0)) - request.start_sec
+            val = float(t.get(axis, default))
+        except Exception:
+            continue
+        if -0.5 <= ts <= request.duration + 0.5:
+            tracks.append((max(0.0, min(request.duration, ts)), _clamp(val, 0.15, 0.85)))
+    if not tracks:
+        return f"{default:.4f}"
+    tracks.sort(key=lambda x: x[0])
+    # Downsample to keep filter graph size reasonable.
+    if len(tracks) > 48:
+        step = max(1, len(tracks) // 48)
+        tracks = tracks[::step] + [tracks[-1]]
+    expr = f"{tracks[-1][1]:.4f}"
+    for i in range(len(tracks) - 2, -1, -1):
+        t, v = tracks[i]
+        next_t = tracks[i + 1][0]
+        expr = f"if(lt(t,{next_t:.3f}),{v:.4f},{expr})"
+    return expr
+
+
+def _face_crop_filter(request: RenderRequest, width: int, height: int) -> str | None:
+    """Best-effort face-centered crop with dynamic zoom punch-ins."""
+    if request.render_mode not in ("podcast", "gaming") and not request.auto_zoom:
+        return None
+    tracks = [t for t in request.face_tracks if isinstance(t, dict)]
+    if not tracks:
+        return None
+
+    pts = []
+    for t in tracks:
+        try:
+            ts = float(t.get("t", 0.0))
+        except Exception:
+            continue
+        if request.start_sec - 1.0 <= ts <= request.end_sec + 1.0:
+            pts.append(t)
+    if not pts:
+        pts = tracks
+    avg_cx = sum(float(p.get("cx", 0.5)) for p in pts) / len(pts)
+    avg_cy = sum(float(p.get("cy", 0.42)) for p in pts) / len(pts)
+    avg_cy = _clamp(avg_cy - 0.04, 0.15, 0.85)
+    avg_cx = _clamp(avg_cx, 0.15, 0.85)
+
+    cx_expr = _face_position_expr(request, "cx", avg_cx)
+    cy_expr = _face_position_expr(request, "cy", avg_cy)
+    timeline = _auto_zoom_timeline(request)
+    default_zoom = 1.03 if request.render_mode == "podcast" else 1.015
+    zoom_expr = _zoom_expr_for_timeline(timeline, default_zoom)
+
+    src_aspect = 16 / 9
+    target_aspect = width / max(1, height)
+    if target_aspect < 1:
+        base_h_expr = f"clip(1/({zoom_expr}),0.35,1.0)"
+        base_w_expr = f"clip(({base_h_expr})*{target_aspect / src_aspect:.6f},0.22,1.0)"
+    else:
+        base_w_expr = f"clip(1/({zoom_expr}),0.35,1.0)"
+        base_h_expr = base_w_expr
+
+    crop_w = f"iw*({base_w_expr})"
+    crop_h = f"ih*({base_h_expr})"
+    x = f"clip(iw*({cx_expr})-({crop_w})/2,0,iw-({crop_w}))"
+    y = f"clip(ih*({cy_expr})-({crop_h})/2,0,ih-({crop_h}))"
+    return (
+        f"crop={crop_w}:{crop_h}:{x}:{y},"
+        f"scale={width}:{height}:flags=lanczos,setsar=1"
+    )
+
+
+def _center_zoom_filter(request: RenderRequest, width: int, height: int) -> str | None:
+    """Dynamic center zoom fallback when no face tracks are available."""
+    if not request.auto_zoom and request.render_mode not in ("podcast", "gaming"):
+        return None
+    timeline = _auto_zoom_timeline(request)
+    default_zoom = 1.02 if request.render_mode == "podcast" else 1.01
+    zoom_expr = _zoom_expr_for_timeline(timeline, default_zoom)
+    src_aspect = 16 / 9
+    target_aspect = width / max(1, height)
+    if target_aspect < 1:
+        base_h_expr = f"clip(1/({zoom_expr}),0.35,1.0)"
+        base_w_expr = f"clip(({base_h_expr})*{target_aspect / src_aspect:.6f},0.22,1.0)"
+    else:
+        base_w_expr = f"clip(1/({zoom_expr}),0.35,1.0)"
+        base_h_expr = base_w_expr
+    crop_w = f"iw*({base_w_expr})"
+    crop_h = f"ih*({base_h_expr})"
+    x = f"(iw-({crop_w}))/2"
+    y = f"(ih-({crop_h}))/2"
+    return f"crop={crop_w}:{crop_h}:{x}:{y},scale={width}:{height}:flags=lanczos,setsar=1"
+
+
 def _escape_filter_path(path: Path) -> str:
     """Escape a Windows path for use inside an ffmpeg filter argument.
 
@@ -93,33 +361,53 @@ def _escape_filter_path(path: Path) -> str:
     return text
 
 
-def _encoder_args(fmt: str) -> list[str]:
+def _encoder_args(fmt: str, preview: bool = False, frame_rate: int | None = None) -> list[str]:
     """Codec and container flags per output format."""
+    fps_args = ["-r", str(frame_rate)] if frame_rate else []
     if fmt == "webm":
-        # VP9 + Opus. No faststart equivalent, but the muxer still writes a
-        # seekable index.
-        return [
+        return fps_args + [
             "-c:v", "libvpx-vp9",
             "-c:a", "libopus",
             "-b:v", "0",
-            "-crf", "32",
-            "-deadline", "good",
-            "-cpu-used", "2",
+            "-crf", "36" if preview else "32",
+            "-deadline", "realtime" if preview else "good",
+            "-cpu-used", "6" if preview else "2",
             "-row-mt", "1",
         ]
-    return [
+    return fps_args + [
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "20",
+        "-preset", "veryfast" if preview else "medium",
+        "-crf", "28" if preview else "20",
         "-pix_fmt", "yuv420p",
-        # even dimensions are required by yuv420p; scale already forces them.
         "-profile:v", "high",
         "-level", "4.2",
         "-c:a", "aac",
-        "-b:a", "192k",
+        "-b:a", "128k" if preview else "192k",
         "-ar", "48000",
         "-movflags", "+faststart",
     ]
+
+
+def _build_trim_filter(stream: str, keeps: list[tuple[float, float]], out_label: str | None = None) -> str:
+    """Build trim+concat filter for dead-air removal on a single stream."""
+    if len(keeps) <= 1:
+        return ""
+    is_audio = stream.endswith(":a") or stream.endswith("a")
+    out_label = out_label or ("[0a]" if is_audio else "[0v]")
+    parts: list[str] = []
+    labels: list[str] = []
+    for i, (s, e) in enumerate(keeps):
+        lbl = f"[k{ 'a' if is_audio else 'v'}{i}]"
+        labels.append(lbl)
+        if is_audio:
+            parts.append(f"[{stream}]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS{lbl}")
+        else:
+            parts.append(f"[{stream}]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS{lbl}")
+    if is_audio:
+        parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=0:a=1{out_label}")
+    else:
+        parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0{out_label}")
+    return ";".join(parts)
 
 
 def _audio_present(source: Path) -> bool:
@@ -142,6 +430,176 @@ def _audio_present(source: Path) -> bool:
     except (subprocess.TimeoutExpired, OSError):
         # Assume audio exists on failure; the graph below handles either case.
         return True
+
+
+def _build_sfx_audio_filter(request: RenderRequest, keeps: list[tuple[float, float]]) -> str:
+    """Best-effort SFX mix using synthesized tones (no external assets required)."""
+    if not request.sfx_enabled or not request.sfx_markers or not keeps:
+        return ""
+    markers = []
+    for m in request.sfx_markers[:12]:
+        if not isinstance(m, dict):
+            continue
+        try:
+            t = float(m.get("t", 0.0)) - request.start_sec
+        except Exception:
+            continue
+        t = _remap_time_for_keep(t, keeps) if len(keeps) > 1 else t
+        if t is None or t < 0:
+            continue
+        markers.append(t)
+    if not markers:
+        return ""
+    out_dur = sum(e - s for s, e in keeps)
+    parts = []
+    labels = []
+    for i, t in enumerate(sorted(set(round(x, 2) for x in markers))):
+        delay_ms = max(0, int(t * 1000))
+        lbl = f"[sfx{i}]"
+        labels.append(lbl)
+        # short "pop" tone; low volume mixed later
+        parts.append(
+            f"sine=frequency={880 if i % 2 == 0 else 660}:sample_rate=48000:duration=0.08,"
+            f"afade=t=in:st=0:d=0.01,afade=t=out:st=0.05:d=0.03,adelay={delay_ms}|{delay_ms}{lbl}"
+        )
+    if not parts:
+        return ""
+    mix = "".join(labels) + f"amix=inputs={len(labels)}:duration=longest,atrim=0:{out_dur:.3f},asetpts=PTS-STARTPTS[sfx]"
+    return ";".join(parts + [mix])
+
+
+def _build_filter_graph(request: RenderRequest, width: int, height: int) -> tuple[str, list[str]]:
+    """Build filter_complex and output map args for supported render modes."""
+
+    keeps = _keep_intervals(request)
+    request._keep_intervals = keeps  # type: ignore[attr-defined]
+
+    sub_filter = ""
+    if request.burn_captions:
+        cues = _build_cues(request, width, height, keeps=keeps)
+        if cues:
+            ass_path = _write_temp_ass(
+                cues,
+                width,
+                height,
+                request.caption_preset_id,
+                request.caption_position,
+                highlight_color=request.highlight_color,
+                keyword_highlight=request.keyword_highlight,
+                keywords=request.keywords,
+            )
+            request._ass_path = ass_path  # type: ignore[attr-defined]
+            sub_filter = f",subtitles='{_escape_filter_path(ass_path)}'"
+
+    hook_banner = ""
+    if request.hook_banner:
+        hb = request.hook_banner.strip().replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "\\%")
+        hb = hb[:60]
+        if hb:
+            hook_banner = (
+                f",drawtext=text='{hb}':x=(w-text_w)/2:y=72:fontsize=54:fontcolor=white:"
+                "box=1:boxcolor=black@0.55:boxborderw=18:enable='between(t,0,3)'"
+            )
+
+    watermark = ""
+    if request.watermark_text:
+        text = request.watermark_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "\\%")
+        watermark = f",drawtext=text='{text}':x=w-tw-24:y=h-th-24:fontsize=28:fontcolor=white@0.75:box=1:boxcolor=black@0.35:boxborderw=10"
+
+    has_audio = _audio_present(request.source)
+    pre_v = _build_trim_filter("0:v", keeps, out_label="[0v]") if len(keeps) > 1 else ""
+    pre_a = _build_trim_filter("0:a", keeps, out_label="[0a]") if len(keeps) > 1 and has_audio else ""
+
+    if request.render_mode == "split_screen" and request.background_source and request.background_source.exists():
+        top_h = height // 2
+        bottom_h = height - top_h
+        src_v = "[0v]" if pre_v else "[0:v:0]"
+        graph = ""
+        if pre_v:
+            graph += pre_v
+        graph += (
+            f"{src_v}{_scale_pad_filter(width, top_h)}[top];"
+            f"[1:v:0]scale={width}:{bottom_h}:force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={width}:{bottom_h},setsar=1[bottom];"
+            f"[top][bottom]vstack=inputs=2{sub_filter}{hook_banner}{watermark}[vout]"
+        )
+        if pre_a or has_audio:
+            sfx = _build_sfx_audio_filter(request, keeps=keeps)
+            audio_in = "[0a]" if pre_a else "[0:a:0]"
+            if sfx:
+                if pre_a:
+                    graph += ";" + pre_a
+                graph += ";" + sfx
+                graph += f";{audio_in}[sfx]amix=inputs=2:duration=first:dropout_transition=0:weights=1 0.18[aout]"
+                return graph, ["-map", "[vout]", "-map", "[aout]"]
+        if pre_a:
+            graph += ";" + pre_a
+            return graph, ["-map", "[vout]", "-map", "[0a]"]
+        if has_audio:
+            return graph, ["-map", "[vout]", "-map", "0:a:0?"]
+        return graph, ["-map", "[vout]"]
+
+    if request.render_mode == "gaming" and request.facecam_enabled and request.facecam_source and request.facecam_source.exists():
+        fc = request.facecam_box or {"x": 0.72, "y": 0.04, "w": 0.24, "h": 0.24}
+        x = _clamp(float(fc.get("x", 0.72)), 0.0, 0.95)
+        y = _clamp(float(fc.get("y", 0.04)), 0.0, 0.95)
+        w = _clamp(float(fc.get("w", 0.24)), 0.1, 0.6)
+        h = _clamp(float(fc.get("h", 0.24)), 0.1, 0.6)
+        overlay_w = max(64, int(width * w))
+        overlay_h = max(64, int(height * h))
+        overlay_x = int(width * x)
+        overlay_y = int(height * y)
+        base_filter = _face_crop_filter(request, width, height) or _scale_pad_filter(width, height)
+        src_v = "[0v]" if pre_v else "[0:v:0]"
+        graph = ""
+        if pre_v:
+            graph += pre_v
+        graph += (
+            f"{src_v}{base_filter}[base];"
+            f"[1:v:0]scale={overlay_w}:{overlay_h}:force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={overlay_w}:{overlay_h},setsar=1[cam];"
+            f"[base][cam]overlay={overlay_x}:{overlay_y}{sub_filter}{hook_banner}{watermark}[vout]"
+        )
+        if pre_a or has_audio:
+            sfx = _build_sfx_audio_filter(request, keeps=keeps)
+            audio_in = "[0a]" if pre_a else "[0:a:0]"
+            if sfx:
+                if pre_a:
+                    graph += ";" + pre_a
+                graph += ";" + sfx
+                graph += f";{audio_in}[sfx]amix=inputs=2:duration=first:dropout_transition=0:weights=1 0.18[aout]"
+                return graph, ["-map", "[vout]", "-map", "[aout]"]
+        if pre_a:
+            graph += ";" + pre_a
+            return graph, ["-map", "[vout]", "-map", "[0a]"]
+        if has_audio:
+            return graph, ["-map", "[vout]", "-map", "0:a:0?"]
+        return graph, ["-map", "[vout]"]
+
+    base_filter = _face_crop_filter(request, width, height) or _center_zoom_filter(request, width, height) or _scale_pad_filter(width, height)
+    src_v = "[0v]" if pre_v else "[0:v:0]"
+    graph = ""
+    if pre_v:
+        graph += pre_v
+    graph += f"{src_v}{base_filter}{sub_filter}{hook_banner}{watermark}[vout]"
+
+    # SFX mix (best-effort): short tones at marker times.
+    if pre_a or has_audio:
+        sfx = _build_sfx_audio_filter(request, keeps=keeps)
+        if sfx:
+            base_audio_label = "[0a]" if pre_a else "[0:a:0]"
+            if pre_a:
+                graph += ";" + pre_a
+            graph += ";" + sfx
+            graph += f";{base_audio_label}[sfx]amix=inputs=2:duration=first:dropout_transition=0:weights=1 0.18[aout]"
+            return graph, ["-map", "[vout]", "-map", "[aout]"]
+
+    if pre_a:
+        graph += ";" + pre_a
+        return graph, ["-map", "[vout]", "-map", "[0a]"]
+    if has_audio:
+        return graph, ["-map", "[vout]", "-map", "0:a:0?"]
+    return graph, ["-map", "[vout]"]
 
 
 # --- Render -----------------------------------------------------------------
@@ -179,42 +637,34 @@ def render_clip(
     # frame or two early, so the output -ss is what actually guarantees the cut
     # point is exact.
     command += ["-ss", f"{max(0.0, request.start_sec):.3f}", "-i", str(request.source)]
+    if request.render_mode == "split_screen" and request.background_source and request.background_source.exists():
+        # Loop background gameplay to cover the main clip duration.
+        command += ["-stream_loop", "-1", "-i", str(request.background_source)]
+    if request.render_mode == "gaming" and request.facecam_enabled and request.facecam_source and request.facecam_source.exists():
+        command += ["-stream_loop", "-1", "-i", str(request.facecam_source)]
     command += ["-t", f"{request.duration:.3f}"]
 
-    chain: list[str] = [_scale_pad_filter(width, height)]
-
-    ass_path: Path | None = None
-    if request.burn_captions:
-        cues = _build_cues(request, width, height)
-        if cues:
-            ass_path = _write_temp_ass(
-                cues, width, height, request.caption_preset_id, request.caption_position
-            )
-            # `subtitles` uses libass, which honours the karaoke and box styling
-            # written into the ASS file.
-            chain.append(f"subtitles='{_escape_filter_path(ass_path)}'")
-
-    # Labels are attached to the chain with no comma: "," joins filter stages,
-    # so a stray separator would read as an empty filter name.
-    graph = "[0:v:0]" + ",".join(chain) + "[vout]"
-
-    command += ["-filter_complex", graph, "-map", "[vout]"]
+    graph, map_args = _build_filter_graph(request, width, height)
+    command += ["-filter_complex", graph] + map_args
 
     has_audio = _audio_present(request.source)
-    if has_audio:
+    mapped_audio = any(a in {"[0a]", "0:a:0?", "0:a"} or ":a" in a for a in map_args)
+    if mapped_audio:
+        if "-shortest" not in command and "-shortest" not in map_args:
+            command += ["-shortest"]
+    elif has_audio:
         command += ["-map", "0:a:0?", "-shortest"]
     else:
-        # Silent source: still valid, just no audio stream.
         logger.info("no audio stream in %s, rendering video only", request.source.name)
 
-    command += _encoder_args(request.fmt)
+    command += _encoder_args(request.fmt, preview=request.preview, frame_rate=request.frame_rate)
     command += ["-progress", "pipe:1", "-nostats", str(request.output)]
 
+    ass_path = getattr(request, "_ass_path", None)
     try:
         _run(command, on_progress, cancel)
     finally:
-        if ass_path is not None:
-            # The ASS file is a temp artifact; the burned video is the deliverable.
+        if isinstance(ass_path, Path):
             ass_path.unlink(missing_ok=True)
 
     if not request.output.exists() or request.output.stat().st_size == 0:
@@ -241,7 +691,12 @@ def _parse_resolution(resolution: str) -> tuple[int, int]:
         return 1080, 1920
 
 
-def _build_cues(request: RenderRequest, width: int, height: int) -> list[CaptionCue]:
+def _build_cues(
+    request: RenderRequest,
+    width: int,
+    height: int,
+    keeps: list[tuple[float, float]] | None = None,
+) -> list[CaptionCue]:
     """Resolve caption text into timed cues.
 
     Prefers the user's caption text. When that text still matches a transcript
@@ -257,13 +712,41 @@ def _build_cues(request: RenderRequest, width: int, height: int) -> list[Caption
     if not text:
         return []
 
-    return cues_for_window(
+    cues = cues_for_window(
         text=text,
         start_sec=request.start_sec,
         end_sec=request.end_sec,
         transcript=request.transcript or [],
         preset_id=request.caption_preset_id,
+        caption_segments=request.caption_segments,
     )
+    if not keeps or len(keeps) <= 1:
+        return cues
+
+    remapped: list[CaptionCue] = []
+    for cue in cues:
+        ns = _remap_time_for_keep(cue.start, keeps)
+        ne = _remap_time_for_keep(cue.end, keeps)
+        if ns is None or ne is None:
+            # Try midpoint for cues spanning a cut boundary.
+            mid = (cue.start + cue.end) / 2
+            nm = _remap_time_for_keep(mid, keeps)
+            if nm is None:
+                continue
+            dur = max(0.2, cue.end - cue.start)
+            ns = max(0.0, nm - dur / 2)
+            ne = ns + dur
+        if ne - ns < 0.12:
+            continue
+        words = []
+        for w in cue.words:
+            ws = _remap_time_for_keep(w.start, keeps)
+            we = _remap_time_for_keep(w.end, keeps)
+            if ws is None or we is None or we <= ws:
+                continue
+            words.append(WordCue(start=round(ws, 3), end=round(we, 3), text=w.text))
+        remapped.append(CaptionCue(start=round(ns, 3), end=round(ne, 3), text=cue.text, words=words or cue.words, karaoke=cue.karaoke))
+    return remapped
 
 
 def _write_temp_ass(
@@ -272,6 +755,9 @@ def _write_temp_ass(
     height: int,
     preset_id: str | None = None,
     position: str | None = None,
+    highlight_color: str | None = None,
+    keyword_highlight: bool = False,
+    keywords: list[str] | None = None,
 ) -> Path:
     """Write the ASS subtitle file to a temp location."""
     handle = tempfile.NamedTemporaryFile(
@@ -283,7 +769,18 @@ def _write_temp_ass(
     )
     path = Path(handle.name)
     with handle:
-        handle.write(build_ass(cues, width, height, preset_id, position))
+        handle.write(
+            build_ass(
+                cues,
+                width,
+                height,
+                preset_id,
+                position,
+                highlight_color=highlight_color,
+                keyword_highlight=keyword_highlight,
+                keywords=keywords,
+            )
+        )
     return path
 
 

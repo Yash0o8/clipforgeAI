@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     # int8 is required to fit larger models in 4GB of VRAM.
     whisper_compute_type: str = "int8"
     whisper_language: str | None = None
+    whisper_initial_prompt: str | None = None
+    transcription_hint: str | None = None  # e.g. hinglish_roman
 
     # --- Highlight pipeline ----------------------------------------------
 
@@ -73,13 +75,51 @@ class Settings(BaseSettings):
     clip_max_duration: float = 90.0
     clip_target_duration: float = 38.0
 
-    # --- LLM (both optional) ---------------------------------------------
+    # --- LLM (all optional) ----------------------------------------------
 
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+    qwen_api_key: str | None = None
+    groq_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openai_base_url: str | None = None
+    qwen_base_url: str | None = None
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     anthropic_model: str = "claude-sonnet-4-5"
     openai_model: str = "gpt-4o-mini"
+    gemini_model: str = "gemini-2.5-flash"
+    qwen_model: str = "qwen2.5-7b-instruct"
+    groq_model: str = "llama-3.3-70b-versatile"
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     llm_timeout_sec: float = 45.0
+
+    # --- Ingestion / modes -----------------------------------------------
+
+    enable_youtube_ingest: bool = True
+    youtube_max_duration_sec: int = 7200
+    gameplay_vault_dir: Path | None = None
+
+    # --- Optional analysis/render features -------------------------------
+
+    enable_face_tracking: bool = True
+    enable_audio_spike_detection: bool = True
+    enable_scene_cut_detection: bool = True
+    enable_dead_air_removal: bool = True
+    enable_sfx_hooks: bool = False
+    face_tracking_sample_fps: float = 2.0
+    auto_zoom_min: float = 1.0
+    auto_zoom_max: float = 1.12
+
+    # --- Queue / productization ------------------------------------------
+
+    job_queue: str = "inline"  # inline | celery
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    enable_demo_limits: bool = False
+    demo_max_projects: int = 3
+    demo_max_exports_per_day: int = 10
+    free_watermark_text: str = "ClipForge Free"
 
     # --- ffmpeg -----------------------------------------------------------
 
@@ -96,6 +136,10 @@ class Settings(BaseSettings):
     @property
     def render_dir(self) -> Path:
         return self.data_dir / "renders"
+
+    @property
+    def vault_dir(self) -> Path:
+        return self.gameplay_vault_dir or (self.data_dir / "vault")
 
     @property
     def database_url(self) -> str:
@@ -121,16 +165,23 @@ class Settings(BaseSettings):
         return found or self.ffprobe_binary
 
     def llm_provider(self) -> str | None:
-        """Which LLM to use, preferring Claude. ``None`` means heuristic-only."""
-        if self.anthropic_api_key:
-            return "anthropic"
-        if self.openai_api_key:
-            return "openai"
+        """Preferred configured LLM provider. ``None`` means heuristic-only."""
+        for name in ("groq", "openrouter", "anthropic", "gemini", "openai", "qwen"):
+            if getattr(self, f"{name}_api_key", None):
+                return name
         return None
+
+    def llm_providers(self) -> list[str]:
+        providers: list[str] = []
+        for name in ("groq", "openrouter", "anthropic", "gemini", "openai", "qwen"):
+            if getattr(self, f"{name}_api_key", None):
+                providers.append(name)
+        return providers
 
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.render_dir.mkdir(parents=True, exist_ok=True)
+        self.vault_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

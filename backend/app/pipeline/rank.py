@@ -62,10 +62,16 @@ For each clip you keep, write:
 - caption: one short line for burned-in subtitles, under 90 characters, no \
 trailing period
 - score: 0-100 for predicted performance
+- viral_score: 0-100 virality potential score
+- hook_banner: 2-5 word top hook banner text
+- keywords: 3-8 important keywords
+- hashtags: 3-8 ready-to-copy hashtags
+- description: short ready-to-copy social description
 
 Return JSON only, with this exact shape:
 {"clips": [{"index": <int>, "title": <str>, "hook": <str>, "caption": <str>, \
-"score": <int>}]}
+"score": <int>, "viral_score": <int>, "hook_banner": <str>, "keywords": [<str>], \
+"hashtags": [<str>], "description": <str>}]}
 
 `index` must be the exact index of the candidate you are selecting. Order the \
 array best-first.\
@@ -168,6 +174,7 @@ def _call_openai(settings: Settings, user_prompt: str) -> str:
 
     client = OpenAI(
         api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
         timeout=settings.llm_timeout_sec,
     )
     response = client.chat.completions.create(
@@ -180,6 +187,80 @@ def _call_openai(settings: Settings, user_prompt: str) -> str:
         ],
     )
     return response.choices[0].message.content or ""
+
+
+def _call_gemini(settings: Settings, user_prompt: str) -> str:
+    try:
+        from google import genai  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RankingError("google-genai is not installed") from exc
+
+    client = genai.Client(api_key=settings.gemini_api_key)
+    response = client.models.generate_content(
+        model=settings.gemini_model,
+        contents=f"{SYSTEM_PROMPT}\n\n{user_prompt}\n\nReturn JSON only.",
+    )
+    text = getattr(response, "text", None)
+    if text:
+        return text
+    # Fallback for SDK shape variations
+    try:
+        return response.candidates[0].content.parts[0].text  # type: ignore[attr-defined]
+    except Exception:
+        return str(response)
+
+
+def _call_qwen(settings: Settings, user_prompt: str) -> str:
+    from openai import OpenAI  # noqa: PLC0415 - optional dependency
+
+    base_url = settings.qwen_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    client = OpenAI(api_key=settings.qwen_api_key, base_url=base_url, timeout=settings.llm_timeout_sec)
+    response = client.chat.completions.create(
+        model=settings.qwen_model,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
+def _call_openai_compatible(settings: Settings, *, api_key: str, base_url: str, model: str, user_prompt: str) -> str:
+    from openai import OpenAI  # noqa: PLC0415 - optional dependency
+
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=settings.llm_timeout_sec)
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
+def _call_groq(settings: Settings, user_prompt: str) -> str:
+    return _call_openai_compatible(
+        settings,
+        api_key=settings.groq_api_key or "",
+        base_url=settings.groq_base_url,
+        model=settings.groq_model,
+        user_prompt=user_prompt,
+    )
+
+
+def _call_openrouter(settings: Settings, user_prompt: str) -> str:
+    return _call_openai_compatible(
+        settings,
+        api_key=settings.openrouter_api_key or "",
+        base_url=settings.openrouter_base_url,
+        model=settings.openrouter_model,
+        user_prompt=user_prompt,
+    )
 
 
 # --- Public API -------------------------------------------------------------
@@ -211,9 +292,18 @@ def rank_candidates(
     user_prompt = build_user_prompt(candidates, limit)
 
     try:
-        raw = _call_anthropic(settings, user_prompt) if provider == "anthropic" else _call_openai(
-            settings, user_prompt
-        )
+        if provider == "anthropic":
+            raw = _call_anthropic(settings, user_prompt)
+        elif provider == "gemini":
+            raw = _call_gemini(settings, user_prompt)
+        elif provider == "qwen":
+            raw = _call_qwen(settings, user_prompt)
+        elif provider == "groq":
+            raw = _call_groq(settings, user_prompt)
+        elif provider == "openrouter":
+            raw = _call_openrouter(settings, user_prompt)
+        else:
+            raw = _call_openai(settings, user_prompt)
     except Exception as exc:
         logger.warning("%s ranking call failed, keeping heuristic order: %s", provider, exc)
         return candidates
@@ -243,19 +333,23 @@ def rank_candidates(
         seen.add(index)
 
         candidate = candidates[index]
+        viral_score = item.get("viral_score", item.get("viralScore", item.get("score", candidate.score)))
         ranked.append(
             Candidate(
                 start_sec=candidate.start_sec,
                 end_sec=candidate.end_sec,
                 text=candidate.text,
                 segments=candidate.segments,
-                # Trust the model's score, but keep it inside the 0-100 range the
-                # UI's relevance sort and badge expect.
                 score=max(0, min(100, float(item.get("score", candidate.score) or candidate.score))),
                 components=candidate.components,
                 title=_clean(item.get("title"), 80, candidate.title),
                 hook=_clean(item.get("hook"), 300, candidate.hook),
                 caption=_clean(item.get("caption"), 120, candidate.caption),
+                viral_score=int(max(0, min(100, float(viral_score or candidate.score)))),
+                hook_banner=_clean(item.get("hook_banner", item.get("hookBanner")), 120, candidate.hook_banner or candidate.title),
+                keywords=[_clean(k, 40) for k in (item.get("keywords") or []) if _clean(k, 40)][:8] or candidate.keywords,
+                hashtags=[_clean(h, 40) for h in (item.get("hashtags") or []) if _clean(h, 40)][:8] or candidate.hashtags,
+                description=_clean(item.get("description"), 500, candidate.description),
             )
         )
 

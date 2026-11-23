@@ -116,6 +116,30 @@ def update_clip(
         exports.update(payload.export.model_dump(exclude_unset=True))
         clip.export_json = json.dumps(exports)
 
+    meta = json.loads(clip.meta_json or "{}")
+    meta_changed = False
+    if payload.viralScore is not None:
+        clip.viral_score = max(0, min(100, int(payload.viralScore)))
+        clip.score = clip.viral_score
+        meta["viralScore"] = clip.viral_score
+        meta_changed = True
+    if payload.keywords is not None:
+        meta["keywords"] = [str(k).strip() for k in payload.keywords if str(k).strip()][:12]
+        meta_changed = True
+    if payload.hashtags is not None:
+        meta["hashtags"] = [str(h).strip() for h in payload.hashtags if str(h).strip()][:20]
+        meta_changed = True
+    if payload.description is not None:
+        meta["description"] = payload.description.strip()
+        meta_changed = True
+    if payload.hookBanner is not None:
+        meta["hookBanner"] = payload.hookBanner.strip()
+        if meta["hookBanner"]:
+            clip.hook = meta["hookBanner"]
+        meta_changed = True
+    if meta_changed:
+        clip.meta_json = json.dumps(meta)
+
     if payload.status is not None:
         clip.status = payload.status
     elif substantive and not was_exported:
@@ -186,7 +210,8 @@ def create_clip(payload: dict[str, Any], session: Session = Depends(get_session)
         start_sec=round(start, 2),
         end_sec=round(end, 2),
         duration_sec=round(end - start, 2),
-        score=0,
+        score=int(payload.get("viralScore") or payload.get("score") or 0),
+        viral_score=int(payload.get("viralScore") or payload.get("score") or 0),
         aspect_ratio=payload.get("aspectRatio") if payload.get("aspectRatio") in ("9:16", "1:1", "16:9") else "9:16",
         status="selected",
         poster_seed=payload.get("posterSeed") or 0,
@@ -196,6 +221,15 @@ def create_clip(payload: dict[str, Any], session: Session = Depends(get_session)
         ),
         export_json=json.dumps(
             payload.get("export") or {"format": "mp4", "resolution": "1080x1920", "burnCaptions": True}
+        ),
+        meta_json=json.dumps(
+            payload.get("meta")
+            or {
+                "keywords": payload.get("keywords") or [],
+                "hashtags": payload.get("hashtags") or [],
+                "description": payload.get("description") or "",
+                "hookBanner": payload.get("hookBanner"),
+            }
         ),
     )
     session.add(clip)

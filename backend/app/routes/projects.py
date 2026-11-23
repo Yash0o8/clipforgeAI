@@ -66,6 +66,13 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     depend on it.
     """
     settings = get_settings()
+    if settings.enable_demo_limits:
+        total_projects = session.query(Project).count()
+        if total_projects >= settings.demo_max_projects:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Demo project limit reached ({settings.demo_max_projects}). Delete a project or upgrade.",
+            )
 
     asset_path: str | None = None
     file_name = payload.fileName
@@ -113,7 +120,8 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     project = Project(
         id=new_id("prj"),
         title=payload.title,
-        source="upload",
+        source="youtube" if payload.sourceUrl else "upload",
+        source_url=payload.sourceUrl,
         file_name=file_name,
         file_size=file_size,
         mime_type=mime,
@@ -126,6 +134,8 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         stages_json=json.dumps(INITIAL_STAGES),
         asset_path=asset_path,
         asset_kind=asset_kind,
+        preset_id=payload.presetId or "podcast",
+        settings_json=json.dumps(payload.settings or {}),
     )
     session.add(project)
     session.commit()
@@ -151,6 +161,12 @@ def update_project(
         project.title = payload.title.strip() or project.title
     if payload.status is not None:
         project.status = payload.status
+    if payload.presetId is not None:
+        project.preset_id = payload.presetId
+    if payload.settings is not None:
+        settings = json.loads(project.settings_json or "{}")
+        settings.update(payload.settings)
+        project.settings_json = json.dumps(settings)
     project.updated_at = utcnow()
 
     session.commit()
@@ -251,6 +267,7 @@ def process_project(project_id: str, session: Session = Depends(get_session)) ->
         lambda ctx: _run_process(session_factory(), db_job.id, ctx),
         settings,
         job_id=db_job.id,
+        payload={"projectId": project_id},
     )
 
     return {
@@ -344,7 +361,14 @@ def generate_clips(
             target_count=target_count,
         )
 
-    queue.submit("generate", project_id, body, settings)
+    queue.submit(
+        "generate",
+        project_id,
+        body,
+        settings,
+        job_id=db_job.id,
+        payload={"minDuration": min_duration, "maxDuration": max_duration, "targetCount": target_count},
+    )
 
     return {
         "jobId": db_job.id,

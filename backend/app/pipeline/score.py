@@ -128,6 +128,11 @@ class Candidate:
     title: str = ""
     hook: str = ""
     caption: str = ""
+    viral_score: int = 0
+    hook_banner: str = ""
+    keywords: list[str] = field(default_factory=list)
+    hashtags: list[str] = field(default_factory=list)
+    description: str = ""
 
     @property
     def duration(self) -> float:
@@ -140,10 +145,15 @@ class Candidate:
             "durationSec": round(self.duration, 2),
             "text": self.text,
             "score": round(self.score, 1),
+            "viralScore": int(self.viral_score or round(self.score)),
             "components": {k: round(v, 3) for k, v in self.components.items()},
             "title": self.title,
             "hook": self.hook,
+            "hookBanner": self.hook_banner,
             "caption": self.caption,
+            "keywords": self.keywords,
+            "hashtags": self.hashtags,
+            "description": self.description,
         }
 
 
@@ -382,6 +392,37 @@ def derive_caption(text: str) -> str:
     return f"{clipped}…"
 
 
+def _synthesise(candidate: Candidate) -> None:
+    """Fill metadata fields when the LLM is absent or partial."""
+    text = (candidate.text or "").strip()
+    if not candidate.title:
+        candidate.title = derive_title(text)
+    if not candidate.hook:
+        candidate.hook = derive_hook(text)
+    if not candidate.caption:
+        candidate.caption = derive_caption(text)
+    if not candidate.viral_score:
+        candidate.viral_score = int(max(0, min(100, round(candidate.score))))
+    tokens = [t for t in _tokens(text) if len(t) > 2 and t not in FILLER_TERMS and t not in PRONOUN_TERMS]
+    keywords: list[str] = []
+    for t in tokens:
+        if t not in keywords:
+            keywords.append(t)
+        if len(keywords) >= 8:
+            break
+    if not candidate.keywords:
+        candidate.keywords = keywords[:8]
+    if not candidate.hashtags:
+        candidate.hashtags = [f"#{k}" for k in keywords[:6]] or ["#clipforge", "#shorts"]
+    if not candidate.hook_banner:
+        source = candidate.hook or candidate.title or "WATCH THIS"
+        candidate.hook_banner = " ".join(source.upper().split()[:5])[:60]
+    if not candidate.description:
+        base = candidate.hook or candidate.caption or candidate.title
+        tags = " ".join(candidate.hashtags[:4])
+        candidate.description = f"{base} {tags}".strip()[:220]
+
+
 # --- Public API -------------------------------------------------------------
 
 
@@ -391,6 +432,10 @@ def score_windows(
     min_duration: float | None = None,
     max_duration: float | None = None,
     target_duration: float | None = None,
+    *,
+    audio_spikes: list[dict[str, Any]] | None = None,
+    scene_cuts: list[float] | None = None,
+    face_tracks: list[dict[str, Any]] | None = None,
 ) -> list[Candidate]:
     """Score every candidate window and return them sorted best-first."""
     if not segments:
@@ -423,26 +468,56 @@ def score_windows(
             "completeness": _completeness_score(end, window_segments, source_end),
             "position": _position_prior(start, source_end),
         }
+        # Optional multimodal signals (best-effort): reward moments with action/scene changes/faces.
+        if audio_spikes:
+            spike_count = 0
+            spike_strength = 0.0
+            for s in audio_spikes:
+                try:
+                    t = float(s.get("t", 0.0))
+                    if start <= t <= end:
+                        spike_count += 1
+                        spike_strength += float(s.get("strength", 0.0))
+                except Exception:
+                    continue
+            components["audio"] = _clamp01(_squash(spike_count, 2.0, 1.2) * 0.7 + _squash(spike_strength, 1.5, 0.8) * 0.3)
+        if scene_cuts:
+            cuts = sum(1 for c in scene_cuts if start <= float(c) <= end)
+            components["visual"] = _clamp01(_squash(cuts, 2.0, 1.1))
+        if face_tracks:
+            face_hits = 0
+            for t in face_tracks:
+                try:
+                    ts = float(t.get("t", 0.0))
+                    if start <= ts <= end:
+                        face_hits += 1
+                except Exception:
+                    continue
+            components["face"] = _clamp01(_squash(face_hits, 3.0, 1.0))
 
-        weighted = sum(WEIGHTS[key] * value for key, value in components.items())
+        weighted = sum(WEIGHTS.get(key, 0.0) * value for key, value in components.items() if key in WEIGHTS)
+        extra_keys = [k for k in ("audio", "visual", "face") if k in components]
+        if extra_keys:
+            extra = sum(components[k] for k in extra_keys) / len(extra_keys)
+            weighted = 0.85 * weighted + 0.15 * extra
         # Blend in a mild length preference: hits the target duration without
         # punishing genuinely short, punchy moments.
         length_fit = math.exp(-((duration - target_duration) / (target_duration * 0.8)) ** 2)
         blended = 0.9 * weighted + 0.1 * length_fit
 
-        candidates.append(
-            Candidate(
-                start_sec=start,
-                end_sec=end,
-                text=text,
-                segments=list(window_segments),
-                score=round(blended * 100, 1),
-                components=components,
-                title=derive_title(text),
-                hook=derive_hook(text),
-                caption=derive_caption(text),
-            )
+        cand = Candidate(
+            start_sec=start,
+            end_sec=end,
+            text=text,
+            segments=list(window_segments),
+            score=round(blended * 100, 1),
+            components=components,
+            title=derive_title(text),
+            hook=derive_hook(text),
+            caption=derive_caption(text),
         )
+        _synthesise(cand)
+        candidates.append(cand)
 
     candidates.sort(key=lambda item: item.score, reverse=True)
     return candidates
@@ -475,6 +550,9 @@ def top_candidates(
     count: int | None = None,
     min_duration: float | None = None,
     max_duration: float | None = None,
+    audio_spikes: list[dict[str, Any]] | None = None,
+    scene_cuts: list[float] | None = None,
+    face_tracks: list[dict[str, Any]] | None = None,
 ) -> list[Candidate]:
     """Score then shortlist. The main entry point for the heuristic pass."""
     candidates = score_windows(
@@ -482,5 +560,8 @@ def top_candidates(
         settings,
         min_duration=min_duration,
         max_duration=max_duration,
+        audio_spikes=audio_spikes,
+        scene_cuts=scene_cuts,
+        face_tracks=face_tracks,
     )
     return shortlist(candidates, settings, count=count)

@@ -32,9 +32,16 @@ export async function getProject(projectId, { signal } = {}) {
  * @param {number} payload.durationSec
  * @param {number} [payload.fileSize]
  * @param {string} [payload.fileName]
+ * @param {string} [payload.uploadId]
+ * @param {string} [payload.sourceUrl]
+ * @param {string} [payload.presetId]
  */
 export async function createProject(payload, { signal } = {}) {
   return post('/projects', payload, { signal });
+}
+
+export async function ingestYoutube(payload, { signal } = {}) {
+  return post('/ingest/youtube', payload, { signal });
 }
 
 /** @param {string} projectId @param {object} patch_ */

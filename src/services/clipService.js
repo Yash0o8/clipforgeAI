@@ -63,6 +63,11 @@ export async function getExportJob(jobId, { signal } = {}) {
   return get(`/exports/${jobId}`, { signal });
 }
 
+export async function listVault({ signal } = {}) {
+  const payload = await get('/vault', { signal });
+  return Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : [];
+}
+
 /**
  * Export history, newest first. Optionally scoped to one project.
  *

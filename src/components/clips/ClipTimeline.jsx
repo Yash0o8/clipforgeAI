@@ -22,6 +22,7 @@ export function ClipTimeline({
   playheadSec,
   onChange,
   onScrub,
+  markers = [],
   className = '',
 }) {
   const trackRef = useRef(null);
@@ -148,6 +149,27 @@ export function ClipTimeline({
             />
           ))}
         </div>
+
+        {/* Analysis markers: spikes/cuts/dead-air help users see attractive areas */}
+        {markers.map((m, i) => {
+          const t = Number(m.t);
+          if (!Number.isFinite(t) || t < 0 || t > sourceDuration) return null;
+          const color =
+            m.type === 'spike' ? 'bg-amber-400/80' :
+            m.type === 'scene' ? 'bg-cyan-400/70' :
+            m.type === 'sfx' ? 'bg-fuchsia-400/80' :
+            m.type === 'dead' ? 'bg-rose-400/45' : 'bg-white/30';
+          const w = m.type === 'dead' ? Math.max(0.4, toPercent(Number(m.end || t) - t)) : 0.2;
+          return (
+            <span
+              key={`${m.type}-${i}-${t}`}
+              aria-hidden
+              title={m.label || m.type}
+              className={`pointer-events-none absolute inset-y-1 rounded-sm ${color}`}
+              style={{ left: `${toPercent(t)}%`, width: `${w}%`, minWidth: m.type === 'dead' ? undefined : 2 }}
+            />
+          );
+        })}
 
         {/* Selected window */}
         <div

@@ -47,7 +47,7 @@ def test_meta_matches_the_frontend_vocabulary(client):
         "prepare",
     ]
     assert payload["clipStatus"] == ["suggested", "selected", "edited", "exported"]
-    assert payload["exportStatus"] == ["queued", "rendering", "complete", "pending_backend", "failed"]
+    assert payload["exportStatus"] == ["queued", "rendering", "complete", "pending_backend", "failed", "cancelled"]
     assert payload["aspectRatios"][0]["id"] == "9:16"
     assert payload["clipLimits"] == {"minDuration": 5, "maxDuration": 90, "defaultDuration": 38}
 
@@ -183,6 +183,9 @@ def test_created_project_has_the_frontend_shape(project):
         "updatedAt",
         "objectUrl",
         "hasLocalSource",
+        "sourceUrl",
+        "presetId",
+        "settings",
     }
     assert set(project) == expected
 
@@ -342,6 +345,12 @@ def test_created_clip_has_the_frontend_shape(clip_rows):
         "transcript",
         "caption",
         "export",
+        "viralScore",
+        "hookBanner",
+        "keywords",
+        "hashtags",
+        "description",
+        "meta",
     }
     assert set(clip_rows[0]) == expected
 

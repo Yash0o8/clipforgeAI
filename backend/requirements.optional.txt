@@ -1,0 +1,20 @@
+# Optional dependencies for advanced ClipForge modes.
+# Install only what you need:
+#   pip install -r backend/requirements.optional.txt
+
+# YouTube ingest
+yt-dlp>=2024.0.0
+
+# Distributed queue
+celery>=5.3.0
+redis>=5.0.0
+
+# Podcast face tracking / active speaker proxy
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+
+# Gaming action/dead-air detection
+librosa>=0.10.0
+numpy>=1.26.0
+scenedetect[opencv]>=0.6.0
+auto-editor>=24.0.0

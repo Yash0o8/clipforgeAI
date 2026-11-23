@@ -121,7 +121,9 @@ def health() -> HealthResponse:
         ffmpeg=ffmpeg_available(),
         whisperModel=settings.whisper_model,
         llmProvider=settings.llm_provider(),
+        llmProviders=settings.llm_providers(),
         device=resolve_device(settings.whisper_device),
+        youtubeIngest=settings.enable_youtube_ingest,
     )
 
 
@@ -133,6 +135,7 @@ def meta() -> dict:
     agree. ``src/utils/constants.js`` is the source of truth for the UI; this
     exists to make a divergence obvious instead of invisible.
     """
+    settings = get_settings()
     return {
         "version": VERSION,
         "stages": [
@@ -144,13 +147,24 @@ def meta() -> dict:
         ],
         "projectStatus": ["draft", "uploading", "processing", "ready", "failed", "cancelled"],
         "clipStatus": ["suggested", "selected", "edited", "exported"],
-        "exportStatus": ["queued", "rendering", "complete", "pending_backend", "failed"],
+        "exportStatus": ["queued", "rendering", "complete", "pending_backend", "failed", "cancelled"],
         "aspectRatios": [
             {"id": "9:16", "width": 1080, "height": 1920},
             {"id": "1:1", "width": 1080, "height": 1080},
             {"id": "16:9", "width": 1920, "height": 1080},
         ],
-        "resolutions": ["1080x1920", "1080x1080", "1920x1080"],
-        "captionPresets": ["clean", "bold", "karaoke", "minimal", "creator"],
+        "resolutions": ["1080x1920", "1080x1080", "1920x1080", "720x1280", "854x480", "480x854"],
+        "captionPresets": ["clean", "bold", "hormozi", "karaoke", "split_center", "minimal", "creator"],
+        "projectPresets": [
+            {"id": "podcast", "label": "Podcast & Talking Head", "renderMode": "podcast"},
+            {"id": "split_screen", "label": "9:16 Split-Screen", "renderMode": "split_screen"},
+            {"id": "gaming", "label": "Pro Gaming Mode", "renderMode": "gaming"},
+        ],
+        "features": {
+            "youtubeIngest": settings.enable_youtube_ingest,
+            "llmProviders": settings.llm_providers(),
+            "renderModes": ["default", "podcast", "split_screen", "gaming"],
+            "previewFirst": True,
+        },
         "clipLimits": {"minDuration": 5, "maxDuration": 90, "defaultDuration": 38},
     }

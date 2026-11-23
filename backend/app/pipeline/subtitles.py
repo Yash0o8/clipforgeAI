@@ -195,12 +195,54 @@ def resolve_caption_text(
     return ""
 
 
+def cues_from_caption_segments(
+    segments: list[dict[str, Any]] | None,
+    start_sec: float,
+    end_sec: float,
+    preset_id: str | None = "clean",
+) -> list[CaptionCue]:
+    """Build cues from user-edited caption segments.
+
+    Segment times may be source-absolute or clip-relative; we detect clip-relative
+    when values fit inside [0, duration].
+    """
+    if not segments:
+        return []
+    span = max(0.2, end_sec - start_sec)
+    karaoke = preset_id == "karaoke"
+    cues: list[CaptionCue] = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        text = clean_caption(str(seg.get("text", "")))
+        if not text:
+            continue
+        try:
+            s = float(seg.get("startSec", seg.get("start", 0.0)))
+            e = float(seg.get("endSec", seg.get("end", s + 1.0)))
+        except Exception:
+            continue
+        # Treat as clip-relative when clearly inside clip span.
+        if 0 <= s <= span + 1.0 and 0 <= e <= span + 1.0 and (s < start_sec - 1.0 or e <= span + 1.0):
+            rs, re_ = s, e
+        else:
+            rs, re_ = s - start_sec, e - start_sec
+        rs = max(0.0, min(span, rs))
+        re_ = max(0.0, min(span, re_))
+        if re_ - rs < 0.15:
+            continue
+        words = spread_words(text, rs, re_)
+        cues.append(CaptionCue(start=round(rs, 3), end=round(re_, 3), text=text, words=words, karaoke=karaoke))
+    return cues
+
+
 def cues_for_window(
     text: str,
     start_sec: float,
     end_sec: float,
     transcript: list[dict[str, Any]] | None = None,
     preset_id: str | None = "clean",
+    caption_segments: list[dict[str, Any]] | None = None,
 ) -> list[CaptionCue]:
     """Build timed cues for a clip window.
 
@@ -208,6 +250,10 @@ def cues_for_window(
     video is trimmed to the window. Word timings from a transcript are
     source-absolute and are rebased here.
     """
+    segment_cues = cues_from_caption_segments(caption_segments, start_sec, end_sec, preset_id)
+    if segment_cues:
+        return segment_cues
+
     text = clean_caption(text)
     if not text:
         return []
@@ -275,7 +321,37 @@ def _timestamp(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{centis:02d}"
 
 
-def _ass_text(cue: CaptionCue, style: Any) -> str:
+def _norm_token(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _keyword_set(keywords: list[str] | None) -> set[str]:
+    return {_norm_token(k) for k in (keywords or []) if _norm_token(k)}
+
+
+def _highlight_keywords(text: str, keywords: list[str] | None, highlight_color: str) -> str:
+    keys = _keyword_set(keywords)
+    if not keys:
+        return escape_text(text)
+    parts = re.split(r"(\s+)", text)
+    out: list[str] = []
+    for part in parts:
+        if not part or part.isspace():
+            out.append(part)
+            continue
+        if _norm_token(part) in keys:
+            out.append(f"{{\\c{highlight_color}}}{escape_text(part)}{{\\c&HFFFFFF&}}")
+        else:
+            out.append(escape_text(part))
+    return "".join(out)
+
+
+def _ass_text(
+    cue: CaptionCue,
+    style: Any,
+    keyword_highlight: bool = False,
+    keywords: list[str] | None = None,
+) -> str:
     """Wrap a cue's text in inline styling, with karaoke timings when needed.
 
     Karaoke in ASS works like this: ``\\k<centiseconds>`` sets how long the *next*
@@ -295,7 +371,10 @@ def _ass_text(cue: CaptionCue, style: Any) -> str:
     font = f"{{\\fn{style.font_name}\\fs{style.font_size}\\b{style.bold}}}"
 
     if not cue.karaoke:
-        return f"{font}{{\\c{style.primary}}}{escaped}"
+        anim = r"{\fscx92\fscy92\t(0,90,\fscx100\fscy100)}" if style.preset_id == "hormozi" else ""
+        if keyword_highlight:
+            return f"{font}{anim}{{\\c{style.primary}}}" + _highlight_keywords(cue.text.upper() if style.uppercase else cue.text, keywords, style.secondary)
+        return f"{font}{anim}{{\\c{style.primary}}}{escaped}"
 
     # Per-word \k tags. Each word's duration is taken from its real timing when
     # available, otherwise split evenly.
@@ -311,15 +390,22 @@ def _ass_text(cue: CaptionCue, style: Any) -> str:
     centis[-1] = max(1, centis[-1] + drift)
 
     tokens = escaped.split(" ")
+    raw_words = (cue.text.upper() if style.uppercase else cue.text).split(" ")
     if len(tokens) != len(centis):
         # Token count changed during escaping; fall back to an even split.
         centis = [max(1, round(total_ms / 10 / len(tokens)))] * len(tokens)
         centis[-1] = max(1, centis[-1] + (round(total_ms / 10) - sum(centis)))
+    if len(raw_words) != len(tokens):
+        raw_words = [t for t in tokens]
 
-    parts = [
-        f"{{\\k{centis[index]}}}{token}"
-        for index, token in enumerate(tokens)
-    ]
+    keys = _keyword_set(keywords) if keyword_highlight else set()
+    parts = []
+    for index, token in enumerate(tokens):
+        raw = raw_words[index] if index < len(raw_words) else token
+        if keys and _norm_token(raw) in keys:
+            parts.append(f"{{\\c{style.secondary}}}{{\\k{centis[index]}}}{token}{{\\c{style.secondary}}}")
+        else:
+            parts.append(f"{{\\k{centis[index]}}}{token}")
     return f"{font}{{\\c{style.secondary}}}{' '.join(parts)}"
 
 
@@ -329,6 +415,9 @@ def build_ass(
     height: int,
     preset_id: str | None = "clean",
     position: str | None = None,
+    highlight_color: str | None = None,
+    keyword_highlight: bool = False,
+    keywords: list[str] | None = None,
 ) -> str:
     """Serialise cues to an ASS subtitle file.
 
@@ -339,7 +428,7 @@ def build_ass(
     left as ``None`` because the caption position is user-editable: without this
     the exported file would ignore the placement shown in the preview.
     """
-    style = build_style(preset_id, position, f"{width}x{height}", width, height)
+    style = build_style(preset_id, position, f"{width}x{height}", width, height, highlight_color=highlight_color)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -361,7 +450,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for cue in cues:
         if cue.end <= cue.start:
             continue
-        text = _ass_text(cue, style)
+        text = _ass_text(cue, style, keyword_highlight=keyword_highlight, keywords=keywords)
         if not text:
             continue
         lines.append(

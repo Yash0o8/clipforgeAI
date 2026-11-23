@@ -1,146 +1,221 @@
 import { useNavigate } from 'react-router-dom';
 import { useState } from 'react';
-import { AlertTriangle, Upload as UploadIcon } from 'lucide-react';
+import { AlertTriangle, Link2, Upload as UploadIcon, Wand2 } from 'lucide-react';
 import { Panel, PanelHeader, PanelBody } from '../components/common/Panel.jsx';
 import { Button } from '../components/common/Button.jsx';
+import { TextField } from '../components/common/TextField.jsx';
 import { VideoDropzone } from '../components/upload/VideoDropzone.jsx';
 import { UploadProgress } from '../components/upload/UploadProgress.jsx';
 import { VideoMetadata } from '../components/upload/VideoMetadata.jsx';
 import { useVideoUpload } from '../hooks/useVideoUpload.js';
 import { useApp } from '../hooks/useApp.js';
 import * as projectService from '../services/projectService.js';
-import { NOTIFICATION_TONE } from '../utils/constants.js';
+import { CREATION_PRESETS, NOTIFICATION_TONE } from '../utils/constants.js';
 
-/**
- * Upload step.
- *
- * Owns the whole hand-off: transfer the bytes, create the project from the
- * uploaded source, kick off the pipeline, then navigate to the processing view.
- * Every one of those steps is a real API call, so a failure here is reported
- * with the server's message instead of being silently swallowed.
- */
 export function UploadPage() {
   const navigate = useNavigate();
-  const { replaceProject, notify } = useApp();
-
-  const [error, setError] = useState(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
   const upload = useVideoUpload();
+  const { addProject, notify } = useApp();
+  const [actionError, setActionError] = useState(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const [sourceMode, setSourceMode] = useState('upload');
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [presetId, setPresetId] = useState('podcast');
+  const [transcriptionHint, setTranscriptionHint] = useState('auto');
+  const [ingestStatus, setIngestStatus] = useState('');
 
-  const onFiles = (fileList) => {
-    setError(null);
-    upload.selectFiles(fileList);
-  };
+  const selectedPreset = CREATION_PRESETS.find((p) => p.id === presetId) ?? CREATION_PRESETS[0];
 
-  const onStart = async () => {
-    const file = upload.file;
-    if (!file) return;
-
-    setError(null);
-    setIsSubmitting(true);
+  const handleProcess = async () => {
+    if (isStarting) return;
+    setActionError(null);
+    setIsStarting(true);
 
     try {
-      // 1. Push the bytes and get an upload handle back.
-      const transfer = await upload.startUpload();
-      if (!transfer.ok) {
-        if (transfer.cancelled) {
-          setError(null);
-        } else {
-          setError(transfer.error?.message ?? 'Upload failed. Try again.');
+      let project;
+      if (sourceMode === 'youtube') {
+        if (!youtubeUrl.trim()) throw new Error('Paste a YouTube URL first.');
+        setIngestStatus('Queueing YouTube ingest...');
+        const ingest = await projectService.ingestYoutube({
+          url: youtubeUrl.trim(),
+          title: youtubeUrl.trim(),
+          presetId,
+          settings: {
+            renderMode: selectedPreset.renderMode,
+            captionPreset: selectedPreset.captionPreset,
+            transcriptionHint: transcriptionHint === 'auto' ? undefined : transcriptionHint,
+          },
+        });
+        project = await projectService.getProject(ingest.projectId);
+        addProject(project);
+        // Wait for ingest to finish downloading/probing before processing.
+        for (let i = 0; i < 180; i++) {
+          setIngestStatus(project?.status === 'processing' ? 'Downloading/probing YouTube media...' : `Ingest status: ${project?.status || 'queued'}...`);
+          if (project?.status === 'failed') throw new Error(project.error || 'YouTube ingest failed.');
+          if (project?.assetPath || project?.objectUrl || project?.hasLocalSource) break;
+          await new Promise((r) => setTimeout(r, 1500));
+          project = await projectService.getProject(ingest.projectId);
+          addProject(project);
         }
-        return;
+        if (!project?.hasLocalSource && !project?.objectUrl) throw new Error('YouTube ingest did not produce a media file.');
+        setIngestStatus('Media ready. Starting AI processing...');
+        await projectService.processProject(project.id);
+      } else {
+        if (!upload.file) return;
+        let uploadId = upload.uploadId;
+        if (!uploadId) {
+          const result = await upload.startUpload();
+          if (!result?.ok) {
+            if (result?.cancelled) return;
+            throw result?.error ?? new Error('Upload failed.');
+          }
+          uploadId = result.uploadId;
+        }
+
+        project = await projectService.createProject({
+          title: upload.file.name.replace(/\.[^.]+$/, ''),
+          durationSec: upload.metadata.durationSec ?? 0,
+          fileSize: upload.file.size,
+          fileName: upload.file.name,
+          mimeType: upload.file.type,
+          uploadId,
+          presetId,
+          settings: {
+            renderMode: selectedPreset.renderMode,
+            captionPreset: selectedPreset.captionPreset,
+            transcriptionHint: transcriptionHint === 'auto' ? undefined : transcriptionHint,
+          },
+        });
+        project = { ...project, objectUrl: upload.objectUrl ?? project.objectUrl };
+        await projectService.processProject(project.id);
       }
 
-      // 2. Attach the uploaded source to a project. The server probes it, so
-      //    duration and dimensions come back authoritative.
-      const project = await projectService.createProject({
-        uploadId: transfer.uploadId,
-        title: file.name.replace(/\.[^/.]+$/, ''),
-      });
-      replaceProject(project);
-
-      // 3. Start the pipeline before navigating, so the processing page finds a
-      //    job already in flight rather than racing a second POST.
-      await projectService.processProject(project.id);
-
-      notify({
-        title: 'Upload complete',
-        body: `${project.title} is being transcribed.`,
-        tone: NOTIFICATION_TONE.INFO,
-      });
-
-      navigate(`/app/upload/processing/${project.id}`);
-    } catch (err) {
-      setError(err.message || 'Upload failed. Try again.');
+      addProject(project);
+      navigate(`/app/projects/${project.id}/processing`);
+    } catch (error) {
+      const message = error?.message ?? 'Could not start processing.';
+      setActionError(message);
+      notify({ tone: NOTIFICATION_TONE.ERROR, title: 'Processing could not start', message });
     } finally {
-      setIsSubmitting(false);
+      setIsStarting(false);
     }
   };
 
-  const onCancel = () => {
-    upload.cancelUpload();
-  };
-
-  const onClear = () => {
-    upload.reset();
-    setError(null);
-  };
+  const busy = upload.status === 'uploading' || isStarting;
+  const canStart = sourceMode === 'youtube' ? Boolean(youtubeUrl.trim()) : Boolean(upload.file) && upload.status !== 'error';
 
   return (
-    <div className="space-y-5">
-      <header>
-        <h1 className="text-[17px] font-semibold text-primary">Upload a video</h1>
-        <p className="mt-0.5 text-sm text-secondary">
-          Drag and drop a file, or pick one from your computer. YouTube URLs are coming soon.
+    <div className="space-y-6">
+      <header className="space-y-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-brand-400">New project</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-primary sm:text-3xl">Create viral clips</h1>
+        <p className="max-w-2xl text-sm text-secondary">
+          Upload a file or paste a YouTube URL, pick a vibe preset, and ClipForge will generate ready-to-post clips.
         </p>
       </header>
 
-      <Panel>
-        <PanelHeader
-          title="Select file"
-          subtitle="MP4, WebM and MOV. Large files are transferred in parts, so a dropped connection does not restart the upload."
-        />
-        <PanelBody className="space-y-5">
-          <VideoDropzone onFiles={onFiles} errors={upload.errors} disabled={upload.isBusy} />
-
-          {upload.hasFile && (
-            <div className="space-y-4">
-              <VideoMetadata
-                file={upload.file}
-                metadata={upload.metadata}
-                isReading={upload.isReading}
-              />
-
-              {upload.status === 'uploading' ? (
-                <UploadProgress
-                  file={upload.file}
-                  progress={upload.progress}
-                  phase={upload.phase}
-                  onCancel={onCancel}
-                />
-              ) : (
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <Button size="sm" variant="ghost" onClick={onClear}>
-                    Choose another file
-                  </Button>
-                  <Button size="sm" loading={isSubmitting} onClick={onStart}>
-                    <UploadIcon aria-hidden className="size-4" />
-                    Start processing
-                  </Button>
-                </div>
-              )}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <Panel>
+          <PanelHeader title="Source & preset" description="Choose input source and creation mode." />
+          <PanelBody className="space-y-5">
+            <div className="flex gap-2">
+              <Button variant={sourceMode === 'upload' ? 'primary' : 'secondary'} size="sm" icon={UploadIcon} onClick={() => setSourceMode('upload')}>Upload file</Button>
+              <Button variant={sourceMode === 'youtube' ? 'primary' : 'secondary'} size="sm" icon={Link2} onClick={() => setSourceMode('youtube')}>YouTube URL</Button>
             </div>
-          )}
-        </PanelBody>
-      </Panel>
 
-      {(error || upload.error) && (
-        <div className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/[0.07] px-4 py-3 text-[12.5px] text-danger">
-          <AlertTriangle aria-hidden className="mt-px size-4 shrink-0" />
-          <p>{error ?? upload.error?.message}</p>
+            {sourceMode === 'youtube' ? (
+              <TextField
+                label="YouTube URL"
+                value={youtubeUrl}
+                onChange={(e) => setYoutubeUrl(e.target.value)}
+                placeholder="https://www.youtube.com/watch?v=..."
+                hint="We’ll fetch the video, transcribe it, and generate clips."
+              />
+            ) : (
+              <>
+                <VideoDropzone onFiles={upload.selectFiles} hasFile={upload.hasFile} fileName={upload.file?.name} onClear={upload.reset} disabled={busy} />
+                {upload.errors.length > 0 ? (
+                  <div className="space-y-2" role="alert">
+                    {upload.errors.map((err) => (
+                      <p key={err.code + err.message} className="rounded-control border border-danger-500/30 bg-danger-500/10 px-3 py-2 text-sm text-danger-400">{err.message}</p>
+                    ))}
+                  </div>
+                ) : null}
+                <UploadProgress progress={upload.progress} status={upload.status} fileName={upload.file?.name} fileSize={upload.file?.size} onCancel={upload.cancelUpload} />
+              </>
+            )}
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-primary">Vibe preset</p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {CREATION_PRESETS.map((preset) => {
+                  const active = preset.id === presetId;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => setPresetId(preset.id)}
+                      className={`rounded-card border p-3 text-left transition ${active ? 'border-brand-500 bg-brand-500/10' : 'border-border bg-surface hover:border-brand-500/40'}`}
+                    >
+                      <p className="text-sm font-semibold text-primary">{preset.label}</p>
+                      <p className="mt-1 text-xs text-muted">{preset.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm text-secondary">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-faint">Transcription</span>
+                <select
+                  className="w-full rounded-lg border border-line bg-ink-900 px-3 py-2 text-sm text-primary"
+                  value={transcriptionHint}
+                  onChange={(e) => setTranscriptionHint(e.target.value)}
+                >
+                  <option value="auto">Auto detect</option>
+                  <option value="hinglish_roman">Hindi + Roman Hinglish</option>
+                </select>
+              </label>
+              <div className="rounded-lg border border-line bg-ink-900/40 px-3 py-2 text-xs text-secondary">
+                <p className="font-medium text-primary">Preset behavior</p>
+                <p className="mt-1">{selectedPreset.description}</p>
+              </div>
+            </div>
+
+            {ingestStatus ? (
+              <div className="rounded-control border border-brand-500/30 bg-brand-500/10 px-3 py-2 text-sm text-brand-200">
+                {ingestStatus}
+              </div>
+            ) : null}
+
+            {actionError ? (
+              <div role="alert" className="flex items-start gap-3 rounded-control border border-danger-500/30 bg-danger-500/10 px-3 py-3 text-sm text-danger-200">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-danger-400" aria-hidden="true" />
+                <div className="space-y-1">
+                  <p className="font-medium text-danger-100">Could not start processing</p>
+                  <p className="text-danger-200/90">{actionError}</p>
+                </div>
+              </div>
+            ) : null}
+          </PanelBody>
+        </Panel>
+
+        <div className="space-y-4">
+          <VideoMetadata file={upload.file} metadata={upload.metadata} isReading={upload.isReading} />
+          <Panel>
+            <PanelBody className="space-y-4">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-primary">Ready when you are</p>
+                <p className="text-xs leading-relaxed text-muted">Processing runs on the server. Preset: <span className="text-primary">{selectedPreset.label}</span>.</p>
+              </div>
+              <Button className="w-full" size="lg" icon={Wand2} onClick={handleProcess} loading={busy} disabled={!canStart}>
+                {busy ? 'Starting' : 'Generate clips'}
+              </Button>
+            </PanelBody>
+          </Panel>
         </div>
-      )}
+      </div>
     </div>
   );
 }

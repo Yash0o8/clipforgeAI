@@ -148,6 +148,7 @@ export function ClipCard({
 
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
             <ScoreBadge score={clip.score} size="xs" />
+            {clip.viralScore != null ? <Badge tone="brand" size="xs">Viral {clip.viralScore}</Badge> : null}
             <Badge tone="outline" size="xs">
               {clip.aspectRatio}
             </Badge>

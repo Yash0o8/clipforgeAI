@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .config import get_settings
+from .config import Settings, get_settings
 
 # Path separators and drive-relative prefixes to reject outright.
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -405,3 +405,28 @@ def ffmpeg_available() -> bool:
 
     settings = get_settings()
     return bool(shutil.which(settings.ffmpeg_binary) and shutil.which(settings.ffprobe_binary))
+
+
+def vault_asset_path(asset_id: str, settings: Settings | None = None) -> Path | None:
+    """Resolve a gameplay vault asset ID to a local file path."""
+    settings = settings or get_settings()
+    manifest = settings.vault_dir / "manifest.json"
+    if not manifest.exists():
+        return None
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    items = data if isinstance(data, list) else data.get("items", [])
+    for item in items:
+        if str(item.get("id")) != str(asset_id):
+            continue
+        rel = item.get("path") or item.get("file")
+        if not rel:
+            continue
+        try:
+            path = safe_join(settings.vault_dir, str(rel))
+        except StorageError:
+            return None
+        return path if path.exists() else None
+    return None

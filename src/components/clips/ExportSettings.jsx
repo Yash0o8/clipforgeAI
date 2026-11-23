@@ -1,9 +1,9 @@
-import { AlertTriangle, Check, Download, FileText, Loader } from 'lucide-react';
+import { AlertTriangle, Check, Download, FileText, Loader, Wand2 } from 'lucide-react';
 import { Button } from '../common/Button.jsx';
 import { Toggle } from '../common/Toggle.jsx';
 import { Select } from '../common/Select.jsx';
 import { Panel, PanelHeader } from '../common/Panel.jsx';
-import { ASPECT_RATIOS, ASPECT_RATIO_MAP, EXPORT_FORMATS, EXPORT_RESOLUTIONS } from '../../utils/constants.js';
+import { ASPECT_RATIOS, ASPECT_RATIO_MAP, EXPORT_FORMATS, EXPORT_RESOLUTIONS, RENDER_MODES } from '../../utils/constants.js';
 import { formatBytes } from '../../utils/formatDuration.js';
 
 /** Estimated output size from bitrate heuristics. */
@@ -27,12 +27,14 @@ export function ExportSettings({
   settings,
   onChange,
   onExport,
+  onExportPreview,
   onDownloadCaptions,
   onDownloadTranscript,
   onDownloadProject,
   isExporting = false,
   progress = 0,
   canExport = true,
+  vaultItems = [],
   className = '',
 }) {
   // The aspect ratio lives on the clip, not the render settings, so one preview
@@ -80,6 +82,73 @@ export function ExportSettings({
           />
         </div>
 
+        <Select
+          label="Frame rate"
+          value={String(settings.frameRate || 30)}
+          onChange={(value) => onChange({ frameRate: Number(value) })}
+          options={[
+            { value: '30', label: '30 fps — Standard' },
+            { value: '60', label: '60 fps — Smooth (HD/gaming)' },
+          ]}
+        />
+
+        <Select
+          label="Render mode"
+          value={settings.renderMode || 'default'}
+          onChange={(value) => onChange({ renderMode: value })}
+          options={RENDER_MODES.map((item) => ({ value: item.id, label: `${item.label} — ${item.description}` }))}
+        />
+
+        {(settings.renderMode === 'split_screen') && (
+          <Select
+            label="Gameplay background"
+            value={settings.backgroundAssetId || ''}
+            onChange={(value) => onChange({ backgroundAssetId: value || null })}
+            options={[
+              { value: '', label: vaultItems.length ? 'Select gameplay from vault' : 'No vault assets found' },
+              ...vaultItems.map((item) => ({ value: item.id, label: item.title || item.id })),
+            ]}
+          />
+        )}
+
+        {(settings.renderMode === 'gaming' && settings.facecamEnabled) && (
+          <div className="space-y-3 rounded-lg border border-line bg-ink-900/40 p-3">
+            <Select
+              label="Facecam asset"
+              value={settings.facecamAssetId || ''}
+              onChange={(value) => onChange({ facecamAssetId: value || null })}
+              options={[
+                { value: '', label: vaultItems.length ? 'Select facecam/video overlay from vault' : 'No vault assets found' },
+                ...vaultItems.map((item) => ({ value: item.id, label: item.title || item.id })),
+              ]}
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                ['x', 'Facecam X'],
+                ['y', 'Facecam Y'],
+                ['w', 'Facecam width'],
+                ['h', 'Facecam height'],
+              ].map(([key, label]) => (
+                <label key={key} className="text-[11px] text-secondary">
+                  <span className="mb-1 block">{label} ({Math.round((settings.facecamBox?.[key] ?? 0) * 100)}%)</span>
+                  <input
+                    type="range"
+                    min={key === 'w' || key === 'h' ? 10 : 0}
+                    max={key === 'w' || key === 'h' ? 60 : 95}
+                    value={Math.round((settings.facecamBox?.[key] ?? (key === 'w' || key === 'h' ? 0.24 : key === 'x' ? 0.72 : 0.04)) * 100)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) / 100;
+                      onChange({ facecamBox: { ...(settings.facecamBox || { x: 0.72, y: 0.04, w: 0.24, h: 0.24 }), [key]: v } });
+                    }}
+                    className="w-full"
+                  />
+                </label>
+              ))}
+            </div>
+            <p className="text-[11px] text-faint">Manual PiP override. Auto-extraction is best-effort; use this to place/size facecam.</p>
+          </div>
+        )}
+
         <Toggle
           id="burn-captions"
           checked={settings.burnCaptions}
@@ -87,6 +156,51 @@ export function ExportSettings({
           label="Burn in captions"
           description="Render the caption track into the video. Turn off for a clean cut."
         />
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Toggle
+            id="preview-render"
+            checked={Boolean(settings.preview)}
+            onChange={(value) => onChange({ preview: value, resolution: value ? '480x854' : settings.resolution, frameRate: value ? 30 : (settings.frameRate || 30) })}
+            label="Quick preview (480p)"
+            description="Fast low-res approval render before HD export."
+          />
+          <Toggle
+            id="watermark"
+            checked={Boolean(settings.watermark)}
+            onChange={(value) => onChange({ watermark: value })}
+            label="Free watermark"
+            description="Add ClipForge watermark for demo/free tier."
+          />
+          <Toggle
+            id="auto-zoom"
+            checked={Boolean(settings.autoZoom)}
+            onChange={(value) => onChange({ autoZoom: value })}
+            label="Auto zoom"
+            description="Subtle zoom punch-ins for podcast/gaming moments."
+          />
+          <Toggle
+            id="dead-air"
+            checked={Boolean(settings.deadAirRemoval)}
+            onChange={(value) => onChange({ deadAirRemoval: value })}
+            label="Dead-air removal"
+            description="Skip detected silent gaps during render (best effort)."
+          />
+          <Toggle
+            id="sfx-hooks"
+            checked={Boolean(settings.sfxEnabled)}
+            onChange={(value) => onChange({ sfxEnabled: value })}
+            label="SFX hooks"
+            description="Mix subtle marker-based SFX when enabled on server (best-effort)."
+          />
+          <Toggle
+            id="facecam-pip"
+            checked={Boolean(settings.facecamEnabled)}
+            onChange={(value) => onChange({ facecamEnabled: value })}
+            label="Facecam PiP"
+            description="Overlay facecam for gaming mode (manual asset)."
+          />
+        </div>
 
         <p className="tabular flex items-center justify-between rounded-lg border border-line bg-ink-900/60 px-3 py-2 text-[11.5px] text-secondary">
           <span>Estimated size</span>
@@ -102,25 +216,38 @@ export function ExportSettings({
           </p>
         )}
 
-        <Button
-          fullWidth
-          size="md"
-          onClick={onExport}
-          loading={isExporting}
-          disabled={!canExport}
-        >
-          {isExporting ? (
-            <>
-              <Loader aria-hidden className="size-4 animate-spin" />
-              Queueing render…
-            </>
-          ) : (
-            <>
-              <Download aria-hidden className="size-4" />
-              Export {settings.format.toUpperCase()}
-            </>
-          )}
-        </Button>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Button
+            fullWidth
+            size="md"
+            variant="secondary"
+            onClick={onExportPreview}
+            loading={isExporting && Boolean(settings.preview)}
+            disabled={!canExport || isExporting}
+          >
+            <Wand2 aria-hidden className="size-4" />
+            Quick 480p preview
+          </Button>
+          <Button
+            fullWidth
+            size="md"
+            onClick={() => onExport?.()}
+            loading={isExporting && !settings.preview}
+            disabled={!canExport || isExporting}
+          >
+            {isExporting && !settings.preview ? (
+              <>
+                <Loader aria-hidden className="size-4 animate-spin" />
+                Queueing render…
+              </>
+            ) : (
+              <>
+                <Download aria-hidden className="size-4" />
+                Export HD
+              </>
+            )}
+          </Button>
+        </div>
 
         {isExporting && (
           <p className="tabular text-center text-[11px] text-faint">{Math.round(progress)}% queued</p>

@@ -1,0 +1,24 @@
+{
+  "items": [
+    { "id": "gta-ramp-01", "title": "GTA Ramp Loop 01", "category": "gta", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "gta-ramp-01.mp4" },
+    { "id": "gta-ramp-02", "title": "GTA Ramp Loop 02", "category": "gta", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "gta-ramp-02.mp4" },
+    { "id": "gta-crash-01", "title": "GTA Crash Loop 01", "category": "gta", "durationSec": 20, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "gta-crash-01.mp4" },
+    { "id": "gta-city-01", "title": "GTA City Drive Loop", "category": "gta", "durationSec": 45, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "gta-city-01.mp4" },
+    { "id": "minecraft-parkour-01", "title": "Minecraft Parkour 01", "category": "minecraft", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "minecraft-parkour-01.mp4" },
+    { "id": "minecraft-parkour-02", "title": "Minecraft Parkour 02", "category": "minecraft", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "minecraft-parkour-02.mp4" },
+    { "id": "minecraft-building-01", "title": "Minecraft Building Loop", "category": "minecraft", "durationSec": 40, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "minecraft-building-01.mp4" },
+    { "id": "satisfying-slime-01", "title": "Satisfying Slime Loop", "category": "satisfying", "durationSec": 20, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "satisfying-slime-01.mp4" },
+    { "id": "satisfying-sand-01", "title": "Satisfying Sand Cutting", "category": "satisfying", "durationSec": 20, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "satisfying-sand-01.mp4" },
+    { "id": "satisfying-soap-01", "title": "Satisfying Soap Cutting", "category": "satisfying", "durationSec": 20, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "satisfying-soap-01.mp4" },
+    { "id": "asmr-keyboard-01", "title": "ASMR Keyboard Loop", "category": "asmr", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "asmr-keyboard-01.mp4" },
+    { "id": "asmr-rain-01", "title": "ASMR Rain Loop", "category": "asmr", "durationSec": 60, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "asmr-rain-01.mp4" },
+    { "id": "subway-surfer-01", "title": "Subway Surfer Loop 01", "category": "subway", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "subway-surfer-01.mp4" },
+    { "id": "subway-surfer-02", "title": "Subway Surfer Loop 02", "category": "subway", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "subway-surfer-02.mp4" },
+    { "id": "temple-run-01", "title": "Temple Run Loop", "category": "mobile-game", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "temple-run-01.mp4" },
+    { "id": "car-drift-01", "title": "Car Drift Loop", "category": "cars", "durationSec": 25, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "car-drift-01.mp4" },
+    { "id": "oddly-satisfying-01", "title": "Oddly Satisfying Loop", "category": "satisfying", "durationSec": 20, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "oddly-satisfying-01.mp4" },
+    { "id": "minecraft-redstone-01", "title": "Minecraft Redstone Loop", "category": "minecraft", "durationSec": 35, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "minecraft-redstone-01.mp4" },
+    { "id": "gta-stunt-01", "title": "GTA Stunt Loop", "category": "gta", "durationSec": 25, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "gta-stunt-01.mp4" },
+    { "id": "visualizer-loop-01", "title": "Abstract Visualizer Loop", "category": "abstract", "durationSec": 30, "license": "royalty-free-placeholder", "source": "Replace with licensed asset", "path": "visualizer-loop-01.mp4" }
+  ]
+}
