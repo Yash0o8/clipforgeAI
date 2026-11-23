@@ -231,6 +231,8 @@ class HealthResponse(BaseModel):
     llmProviders: list[str] = Field(default_factory=list)
     device: str
     youtubeIngest: bool = True
+    demoLimits: bool = False
+    allow1080p60Exports: bool = False
 
 
 class DownloadResponse(BaseModel):

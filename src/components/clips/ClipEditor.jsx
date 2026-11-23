@@ -93,7 +93,7 @@ function TranscriptPanel({ transcript, currentTime, onSeek }) {
  */
 export function ClipEditor({ clipId }) {
   const toast = useToast();
-  const { setClipStatus, patchClip, trackExport, patchExport, settings } = useApp();
+  const { setClipStatus, patchClip, trackExport, patchExport, settings, capabilities } = useApp();
 
   const {
     clip,
@@ -779,6 +779,7 @@ export function ClipEditor({ clipId }) {
             isExporting={isExporting}
             canExport={canExport}
             vaultItems={vaultItems}
+            capabilities={capabilities}
           />
 
           {/* Live render state, driven by the server's job resource. */}

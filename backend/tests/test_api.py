@@ -530,6 +530,34 @@ def test_export_rejects_an_invalid_resolution(client, ready_project, clip_rows):
     assert response.status_code == 422
 
 
+def test_export_1080p60_requires_entitlement(client, ready_project, clip_rows, monkeypatch):
+    from app.routes import exports as export_routes
+
+    real = export_routes.get_settings()
+
+    class FakeSettings:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        @property
+        def allow_1080p60_exports(self):
+            return False
+
+        @property
+        def enable_demo_limits(self):
+            return False
+
+    monkeypatch.setattr(export_routes, "get_settings", lambda: FakeSettings())
+
+    response = client.post(
+        f"{API}/clips/{clip_rows[0]['id']}/export",
+        json={"resolution": "1080x1920", "frameRate": 60},
+    )
+
+    assert response.status_code == 402
+    assert "1080p60" in response.json()["detail"]
+
+
 def test_export_renders_a_real_mp4_and_downloads_it(client, ready_project, clip_rows, ffmpeg_path):
     """The end-to-end promise: upload -> clip -> export -> a playable file."""
     queued = client.post(

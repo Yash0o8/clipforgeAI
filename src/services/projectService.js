@@ -14,6 +14,10 @@
 
 import { get, post, patch, del } from './api.js';
 
+export async function getCapabilities({ signal } = {}) {
+  return get('/meta', { signal });
+}
+
 /** @returns {Promise<Array>} */
 export async function listProjects({ status, signal } = {}) {
   const query = status ? `?status=${encodeURIComponent(status)}` : '';

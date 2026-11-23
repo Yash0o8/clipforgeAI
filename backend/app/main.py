@@ -124,6 +124,8 @@ def health() -> HealthResponse:
         llmProviders=settings.llm_providers(),
         device=resolve_device(settings.whisper_device),
         youtubeIngest=settings.enable_youtube_ingest,
+        demoLimits=settings.enable_demo_limits,
+        allow1080p60Exports=settings.allow_1080p60_exports,
     )
 
 
@@ -165,6 +167,8 @@ def meta() -> dict:
             "llmProviders": settings.llm_providers(),
             "renderModes": ["default", "podcast", "split_screen", "gaming"],
             "previewFirst": True,
+            "demoLimits": settings.enable_demo_limits,
+            "allow1080p60Exports": settings.allow_1080p60_exports,
         },
         "clipLimits": {"minDuration": 5, "maxDuration": 90, "defaultDuration": 38},
     }

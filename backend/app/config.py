@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     demo_max_projects: int = 3
     demo_max_exports_per_day: int = 10
     free_watermark_text: str = "ClipForge Free"
+    allow_1080p60_exports: bool = False  # paid/entitled tier gate; false keeps 60fps HD as upgrade path
 
     # --- ffmpeg -----------------------------------------------------------
 

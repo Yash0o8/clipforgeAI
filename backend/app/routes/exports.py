@@ -114,6 +114,17 @@ def start_export(
                 status_code=429,
                 detail=f"Demo export limit reached ({settings.demo_max_exports_per_day}/day). Try again tomorrow or upgrade.",
             )
+        # Demo/free tier: keep watermark on non-preview exports unless explicitly allowed later by plan.
+        if not payload.preview:
+            payload.watermark = True
+
+    requested_frame_rate = int(payload.frameRate) if payload.frameRate else 30
+    hd_resolutions = {"1080x1920", "1080x1080", "1920x1080"}
+    if requested_frame_rate >= 60 and payload.resolution in hd_resolutions and not settings.allow_1080p60_exports:
+        raise HTTPException(
+            status_code=402,
+            detail="1080p60 exports are available on paid plans. Export at 30fps or enable ALLOW_1080P60_EXPORTS for entitled users.",
+        )
 
     queue = get_queue_or_503()
 

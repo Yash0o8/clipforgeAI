@@ -35,6 +35,7 @@ export function ExportSettings({
   progress = 0,
   canExport = true,
   vaultItems = [],
+  capabilities = null,
   className = '',
 }) {
   // The aspect ratio lives on the clip, not the render settings, so one preview
@@ -43,6 +44,8 @@ export function ExportSettings({
   const resolution = EXPORT_RESOLUTIONS.find((item) => item.id === settings.resolution);
   const width = resolution ? Number(resolution.id.split('x')[0]) : aspect.width;
   const height = resolution ? Number(resolution.id.split('x')[1]) : aspect.height;
+  const allow1080p60 = Boolean(capabilities?.features?.allow1080p60Exports ?? capabilities?.allow1080p60Exports);
+  const demoLimits = Boolean(capabilities?.features?.demoLimits ?? capabilities?.demoLimits);
 
   const estimated = estimateSize({ durationSec: clip?.durationSec ?? 0, width, height });
 
@@ -85,12 +88,28 @@ export function ExportSettings({
         <Select
           label="Frame rate"
           value={String(settings.frameRate || 30)}
-          onChange={(value) => onChange({ frameRate: Number(value) })}
+          onChange={(value) => {
+            const next = Number(value);
+            if (next >= 60 && !allow1080p60) {
+              onChange({ frameRate: 30 });
+              return;
+            }
+            onChange({ frameRate: next });
+          }}
           options={[
             { value: '30', label: '30 fps — Standard' },
-            { value: '60', label: '60 fps — Smooth (HD/gaming)' },
+            {
+              value: '60',
+              label: allow1080p60 ? '60 fps — Smooth (HD/gaming)' : '60 fps — Paid plan (1080p60)',
+              disabled: !allow1080p60,
+            },
           ]}
         />
+        {!allow1080p60 && (
+          <p className="text-[11px] text-faint">
+            1080p60 export is gated for paid/entitled tiers. 30fps HD remains available.
+          </p>
+        )}
 
         <Select
           label="Render mode"
@@ -167,10 +186,10 @@ export function ExportSettings({
           />
           <Toggle
             id="watermark"
-            checked={Boolean(settings.watermark)}
-            onChange={(value) => onChange({ watermark: value })}
+            checked={Boolean(settings.watermark || (demoLimits && !settings.preview))}
+            onChange={(value) => onChange({ watermark: demoLimits && !settings.preview ? true : value })}
             label="Free watermark"
-            description="Add ClipForge watermark for demo/free tier."
+            description={demoLimits ? 'Demo/free tier enforces watermark on HD exports.' : 'Add ClipForge watermark for demo/free tier.'}
           />
           <Toggle
             id="auto-zoom"

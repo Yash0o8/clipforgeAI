@@ -47,6 +47,7 @@ const INITIAL_STATE = {
   exports: [],
   notifications: [],
   settings: DEFAULT_SETTINGS,
+  capabilities: null,
   /** True until the first project list has come back from the API. */
   isLoading: true,
   /** Set when the API could not be reached, so pages can explain themselves. */
@@ -127,11 +128,15 @@ function reducer(state, action) {
         isLoading: false,
         loadError: null,
         projects: action.projects,
+        capabilities: action.capabilities ?? state.capabilities,
         // Drop clips for projects the API no longer knows about.
         clips: state.clips.filter((clip) =>
           action.projects.some((project) => project.id === clip.projectId)
         ),
       };
+
+    case 'capabilities/set':
+      return { ...state, capabilities: action.capabilities };
 
     case 'projects/add':
       return { ...state, projects: [action.project, ...state.projects] };
@@ -317,8 +322,11 @@ export function AppProvider({ children }) {
   const refreshProjects = useCallback(async () => {
     dispatch({ type: 'hydrate/start' });
     try {
-      const projects = await projectService.listProjects();
-      dispatch({ type: 'hydrate/success', projects });
+      const [projects, capabilities] = await Promise.all([
+        projectService.listProjects(),
+        projectService.getCapabilities().catch(() => null),
+      ]);
+      dispatch({ type: 'hydrate/success', projects, capabilities });
       return projects;
     } catch (error) {
       dispatch({ type: 'hydrate/failure', error });
@@ -528,6 +536,7 @@ export function AppProvider({ children }) {
   const value = useMemo(
     () => ({
       ...state,
+      capabilities: state.capabilities,
       refreshProjects,
       loadClips,
       ensureClips,
