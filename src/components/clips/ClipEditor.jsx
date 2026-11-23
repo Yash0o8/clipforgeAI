@@ -514,6 +514,8 @@ export function ClipEditor({ clipId }) {
                 showCaptions={settings.preferences.showCaptionsDefault}
                 autoPlay={settings.preferences.autoplayPreview}
                 timeBase={isRenderReady ? draft.startSec : 0}
+                backgroundUrl={vaultItems.find((i) => i.id === draft.export?.backgroundAssetId)?.mediaUrl || null}
+                facecamUrl={vaultItems.find((i) => i.id === draft.export?.facecamAssetId)?.mediaUrl || null}
               />
             </div>
 

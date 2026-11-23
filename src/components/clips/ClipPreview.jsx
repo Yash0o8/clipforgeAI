@@ -256,6 +256,8 @@ export function ClipPreview({
   showCaptions = true,
   autoPlay = false,
   timeBase = 0,
+  backgroundUrl = null,
+  facecamUrl = null,
   className = '',
 }) {
   const containerRef = useRef(null);
@@ -357,15 +359,59 @@ export function ClipPreview({
         >
           {hasSource ? (
             <>
-              <video
-                ref={videoRef}
-                src={sourceUrl}
-                playsInline
-                preload="metadata"
-                muted={muted}
-                className="absolute inset-0 size-full cursor-pointer object-contain"
-                aria-label={`Preview of ${clip?.title ?? 'clip'}`}
-              />
+              {clip?.renderMode === 'split_screen' ? (
+                <div className="absolute inset-0 grid grid-rows-2 bg-black">
+                  <div className="relative overflow-hidden bg-black">
+                    <video
+                      ref={videoRef}
+                      src={sourceUrl}
+                      playsInline
+                      preload="metadata"
+                      muted={muted}
+                      className="absolute inset-0 size-full cursor-pointer object-contain"
+                      aria-label={`Preview of ${clip?.title ?? 'clip'}`}
+                    />
+                  </div>
+                  <div className="relative overflow-hidden border-t border-white/10 bg-ink-950">
+                    {backgroundUrl ? (
+                      <video src={backgroundUrl} muted loop autoPlay playsInline preload="metadata" className="absolute inset-0 size-full object-cover" />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(124,58,237,0.22),_transparent_55%),linear-gradient(180deg,_rgba(20,20,32,0.95),_rgba(8,8,14,1))] text-[10px] text-white/45">
+                        Select gameplay background
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <video
+                    ref={videoRef}
+                    src={sourceUrl}
+                    playsInline
+                    preload="metadata"
+                    muted={muted}
+                    className="absolute inset-0 size-full cursor-pointer object-contain"
+                    aria-label={`Preview of ${clip?.title ?? 'clip'}`}
+                  />
+                  {clip?.renderMode === 'gaming' && facecamUrl ? (
+                    <video
+                      src={facecamUrl}
+                      muted
+                      loop
+                      autoPlay
+                      playsInline
+                      preload="metadata"
+                      className="absolute z-10 rounded-md border border-white/20 object-cover shadow-lg"
+                      style={{
+                        left: `${(clip?.facecamBox?.x ?? 0.72) * 100}%`,
+                        top: `${(clip?.facecamBox?.y ?? 0.04) * 100}%`,
+                        width: `${(clip?.facecamBox?.w ?? 0.24) * 100}%`,
+                        height: `${(clip?.facecamBox?.h ?? 0.24) * 100}%`,
+                      }}
+                    />
+                  ) : null}
+                </>
+              )}
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
