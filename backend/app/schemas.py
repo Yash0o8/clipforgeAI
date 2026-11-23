@@ -191,6 +191,7 @@ class ExportRequest(CamelModel):
     highlightColor: str | None = Field(default=None, max_length=32)
     captionOnly: bool = False
     frameRate: int | None = Field(default=None, ge=24, le=60)
+    hookBanner: str | None = Field(default=None, max_length=300)
 
     @field_validator("resolution")
     @classmethod

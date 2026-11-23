@@ -496,9 +496,12 @@ def _build_filter_graph(request: RenderRequest, width: int, height: int) -> tupl
         hb = request.hook_banner.strip().replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "\\%")
         hb = hb[:60]
         if hb:
+            font_size = max(34, int(height * 0.042))
+            y_pos = max(48, int(height * 0.06))
             hook_banner = (
-                f",drawtext=text='{hb}':x=(w-text_w)/2:y=72:fontsize=54:fontcolor=white:"
-                "box=1:boxcolor=black@0.55:boxborderw=18:enable='between(t,0,3)'"
+                f",drawtext=text='{hb}':x=(w-text_w)/2:y={y_pos}:fontsize={font_size}:fontcolor=white:"
+                "borderw=3:bordercolor=black@0.75:box=1:boxcolor=black@0.5:boxborderw=18:"
+                "enable='between(t,0,3)'"
             )
 
     watermark = ""

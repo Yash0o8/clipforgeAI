@@ -353,6 +353,7 @@ export function ClipEditor({ clipId }) {
         captionSegments: draft.caption?.segments || undefined,
         keywordHighlight: Boolean(draft.caption?.keywordHighlight),
         highlightColor: draft.caption?.highlightColor || undefined,
+        hookBanner: draft.hookBanner || undefined,
         renderMode: exportSettings.renderMode || 'default',
         backgroundAssetId: exportSettings.backgroundAssetId || undefined,
         preview: Boolean(exportSettings.preview),

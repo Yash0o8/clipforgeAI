@@ -294,10 +294,10 @@ def build_style(
     margin_v = int(round(preset["margin_v"] * scale_y))
     align = alignment(position)
     if position == "divider":
-        # Place captions at the split-screen divider (middle of 9:16 frame).
-        # Use bottom-center alignment so MarginV is reliable across renderers.
+        # Split-screen 1080x1920: divider is at y=960. Use bottom-center alignment
+        # so MarginV measures from bottom; place text slightly above center line.
         align = 2
-        margin_v = max(0, int(height * 0.48))
+        margin_v = max(0, int(height * 0.5 - size * 0.65))
 
     highlight = highlight_color or preset["highlight"]
 

@@ -397,8 +397,8 @@ export function ClipPreview({
           )}
 
           {(clip?.hookBanner || clip?.hook) && (currentTime - (clip?.startSec ?? 0)) <= 3 && (
-            <div className="pointer-events-none absolute inset-x-0 top-[6%] z-20 flex justify-center px-4">
-              <span className="rounded-md bg-black/55 px-3 py-1.5 text-center text-[11px] font-extrabold tracking-wide text-white uppercase shadow-[0_2px_12px_rgba(0,0,0,0.45)]">
+            <div className="pointer-events-none absolute inset-x-0 top-[5%] z-20 flex justify-center px-4">
+              <span className="rounded-md border border-white/10 bg-black/60 px-3 py-1.5 text-center text-[11px] font-extrabold tracking-[0.08em] text-white uppercase shadow-[0_4px_18px_rgba(0,0,0,0.5)] backdrop-blur-[1px]">
                 {clip.hookBanner || clip.hook}
               </span>
             </div>
