@@ -49,6 +49,7 @@ def queue_export(
         burn = stored_export.get("burnCaptions", True)
 
     caption = json.loads(clip.caption_json or "{}")
+    clip_meta = json.loads(clip.meta_json or "{}")
     preset_id = settings_from_request.get("captionPresetId") or caption.get("presetId") or "clean"
     caption_text = settings_from_request.get("captionText")
     caption_position = settings_from_request.get("captionPosition")
@@ -65,7 +66,12 @@ def queue_export(
     facecam_box = settings_from_request.get("facecamBox") or stored_export.get("facecamBox")
     caption_only = bool(settings_from_request.get("captionOnly"))
     frame_rate = settings_from_request.get("frameRate") or stored_export.get("frameRate")
-    hook_banner = settings_from_request.get("hookBanner") or stored_export.get("hookBanner") or (clip_meta.get("hookBanner") if isinstance(clip_meta, dict) else None)
+    hook_banner = (
+        settings_from_request.get("hookBanner")
+        or stored_export.get("hookBanner")
+        or (clip_meta.get("hookBanner") if isinstance(clip_meta, dict) else None)
+        or (clip_meta.get("hook") if isinstance(clip_meta, dict) else None)
+    )
     keyword_highlight = settings_from_request.get("keywordHighlight")
     if keyword_highlight is None:
         keyword_highlight = caption.get("keywordHighlight", False)
