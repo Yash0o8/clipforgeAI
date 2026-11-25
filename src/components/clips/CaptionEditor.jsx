@@ -1,9 +1,35 @@
+import { useId, useState } from 'react';
 import { Check, Copy, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { TextArea, TextField } from '../common/TextField.jsx';
 import { CAPTION_POSITIONS, CAPTION_PRESETS } from '../../utils/constants.js';
 import { Button } from '../common/Button.jsx';
 import { useToast } from '../../hooks/useToast.js';
 import { formatClock } from '../../utils/formatDuration.js';
+
+const SEGMENT_STEP = 0.01;
+const MIN_SEGMENT_GAP = 0.01;
+const ADD_SEGMENT_GAP = 0.5;
+
+function toFiniteNumber(value) {
+  if (value === '' || value === null || value === undefined) return Number.NaN;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function roundSeconds(value) {
+  return Math.round(value * 100) / 100;
+}
+
+function segmentProblem(segment) {
+  const start = toFiniteNumber(segment?.startSec);
+  const end = toFiniteNumber(segment?.endSec);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return 'Enter a valid start and end time.';
+  }
+  if (start < 0) return 'Start must be at least 0 and before End.';
+  if (end <= start) return 'End must be after Start.';
+  return null;
+}
 
 /** Colour swatch + label, matching the on-frame caption treatment. */
 function PresetSwatch({ style }) {
@@ -56,6 +82,65 @@ export function CaptionEditor({
   const toast = useToast();
   const preset = CAPTION_PRESETS.find((item) => item.id === presetId) ?? CAPTION_PRESETS[0];
   const isDirty = caption !== originalText;
+  const hintIdBase = useId();
+  const [invalidEntry, setInvalidEntry] = useState(null);
+
+  const commitSegment = (index, patch, message) => {
+    setInvalidEntry(message ? { index, message } : null);
+    onChangeSegments?.(
+      (Array.isArray(segments) ? segments : []).map((segment, i) =>
+        i === index ? { ...segment, ...patch } : segment
+      )
+    );
+  };
+
+  const rejectEntry = (index, message) => setInvalidEntry({ index, message });
+
+  const handleStartChange = (index, segment, rawValue) => {
+    const start = toFiniteNumber(rawValue);
+    const end = toFiniteNumber(segment?.endSec);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= 0) {
+      rejectEntry(index, 'Start must be at least 0 and before End.');
+      return;
+    }
+    const clamped = roundSeconds(Math.max(0, Math.min(start, end - MIN_SEGMENT_GAP)));
+    const message =
+      clamped === roundSeconds(start)
+        ? undefined
+        : 'Start was adjusted to stay at least 0 and before End.';
+    commitSegment(index, { startSec: clamped }, message);
+  };
+
+  const handleEndChange = (index, segment, rawValue) => {
+    const start = toFiniteNumber(segment?.startSec);
+    const end = toFiniteNumber(rawValue);
+    if (!Number.isFinite(start) || start < 0 || !Number.isFinite(end)) {
+      rejectEntry(index, 'End must be after Start.');
+      return;
+    }
+    const clamped = roundSeconds(Math.max(start + MIN_SEGMENT_GAP, end));
+    const message =
+      clamped === roundSeconds(end) ? undefined : 'End was adjusted to stay after Start.';
+    commitSegment(index, { endSec: clamped }, message);
+  };
+
+  const addSegment = () => {
+    const clipStart = toFiniteNumber(clipStartSec);
+    const start = Number.isFinite(clipStart) ? Math.max(0, clipStart) : 0;
+    const clipEnd = toFiniteNumber(clipEndSec);
+    const candidate =
+      Number.isFinite(clipEnd) && clipEnd > 0 ? Math.min(clipEnd, start + 2) : start + 2;
+    const end = Math.max(start + ADD_SEGMENT_GAP, candidate);
+    setInvalidEntry(null);
+    onChangeSegments?.([
+      ...(segments || []),
+      {
+        startSec: roundSeconds(start),
+        endSec: roundSeconds(end),
+        text: caption || 'New caption',
+      },
+    ]);
+  };
 
   const copyCaption = async () => {
     try {
@@ -185,37 +270,70 @@ export function CaptionEditor({
             size="xs"
             variant="secondary"
             disabled={disabled}
-            onClick={() => {
-              const start = Math.max(0, clipStartSec);
-              const end = Math.min(clipEndSec || start + 2, start + 2);
-              onChangeSegments?.([...(segments || []), { startSec: start, endSec: Math.max(start + 0.5, end), text: caption || 'New caption' }]);
-            }}
+            onClick={addSegment}
           >
             <Plus aria-hidden className="size-3" /> Add
           </Button>
         </div>
         <p className="text-[11px] text-faint">Quick edit timed captions. Save and re-export to re-render without reanalysis.</p>
         <div className="space-y-2 max-h-56 overflow-auto pr-1">
-          {(segments || []).map((seg, i) => (
-            <div key={`${seg.startSec}-${i}`} className="rounded-md border border-line bg-ink-900/50 p-2 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                <TextField label="Start" size="sm" value={String(seg.startSec ?? '')} onChange={(e) => {
-                  const next = [...segments]; next[i] = { ...seg, startSec: Number(e.target.value) || 0 }; onChangeSegments?.(next);
-                }} />
-                <TextField label="End" size="sm" value={String(seg.endSec ?? '')} onChange={(e) => {
-                  const next = [...segments]; next[i] = { ...seg, endSec: Number(e.target.value) || 0 }; onChangeSegments?.(next);
-                }} />
+          {(segments || []).map((seg, i) => {
+            const problem =
+              invalidEntry?.index === i ? invalidEntry.message : segmentProblem(seg);
+            const hintId = `${hintIdBase}-segment-${i}-range`;
+            const start = toFiniteNumber(seg.startSec);
+            const endMin = Number.isFinite(start)
+              ? roundSeconds(Math.max(0, start + MIN_SEGMENT_GAP))
+              : MIN_SEGMENT_GAP;
+            return (
+              <div key={`segment-${i}`} className="rounded-md border border-line bg-ink-900/50 p-2 space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <TextField
+                    label="Start"
+                    type="number"
+                    min={0}
+                    step={SEGMENT_STEP}
+                    value={String(seg.startSec ?? '')}
+                    onChange={(event) => handleStartChange(i, seg, event.target.value)}
+                    aria-invalid={Boolean(problem) || undefined}
+                    aria-describedby={problem ? hintId : undefined}
+                  />
+                  <TextField
+                    label="End"
+                    type="number"
+                    min={endMin}
+                    step={SEGMENT_STEP}
+                    value={String(seg.endSec ?? '')}
+                    onChange={(event) => handleEndChange(i, seg, event.target.value)}
+                    aria-invalid={Boolean(problem) || undefined}
+                    aria-describedby={problem ? hintId : undefined}
+                  />
+                </div>
+                {problem && (
+                  <p id={hintId} aria-live="polite" className="text-[11.5px] leading-relaxed text-danger">
+                    {problem}
+                  </p>
+                )}
+                <TextField
+                  label={`Text (${formatClock(seg.startSec || 0)})`}
+                  value={seg.text ?? ''}
+                  onChange={(event) => commitSegment(i, { text: event.target.value })}
+                />
+                <div className="flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      setInvalidEntry(null);
+                      onChangeSegments?.((segments || []).filter((_, idx) => idx !== i));
+                    }}
+                  >
+                    <Trash2 aria-hidden className="size-3" /> Remove
+                  </Button>
+                </div>
               </div>
-              <TextField label={`Text (${formatClock(seg.startSec || 0)})`} size="sm" value={seg.text ?? ''} onChange={(e) => {
-                const next = [...segments]; next[i] = { ...seg, text: e.target.value }; onChangeSegments?.(next);
-              }} />
-              <div className="flex justify-end">
-                <Button size="xs" variant="ghost" onClick={() => onChangeSegments?.(segments.filter((_, idx) => idx !== i))}>
-                  <Trash2 aria-hidden className="size-3" /> Remove
-                </Button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {!segments?.length && <p className="text-[11px] text-faint">No manual segments. Transcript/caption text timing will be used.</p>}
         </div>
       </div>

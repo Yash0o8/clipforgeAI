@@ -84,7 +84,7 @@ export function VideoMetadata({ file, metadata, isReading = false, title, onTitl
               value={
                 <span className="inline-flex items-center justify-end gap-1.5 text-secondary">
                   <HardDrive aria-hidden className="size-3 text-faint" />
-                  This browser only
+                  Your ClipForge server
                 </span>
               }
             />

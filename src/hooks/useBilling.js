@@ -10,12 +10,24 @@ import { useApp } from './useApp.js';
  * and can be refreshed after a referral or checkout.
  */
 export function useBilling() {
-  const { capabilities } = useApp();
+  const {
+    capabilities,
+    isLoading: appLoading,
+    loadError: appLoadError,
+    refreshProjects,
+  } = useApp();
   const deviceId = getDeviceId();
   const plans = capabilities?.features?.plans ?? [];
   const [account, setAccount] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Plans come from the app's `/meta` hydration, so retrying them means asking
+  // the provider to hydrate again — the account refresh flow stays unchanged.
+  const retryPlans = useCallback(async () => {
+    if (!refreshProjects) return;
+    await refreshProjects().catch(() => {});
+  }, [refreshProjects]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -54,5 +66,17 @@ export function useBilling() {
     };
   }, []);
 
-  return { deviceId, plans, account, error, loading, refresh };
+  return {
+    deviceId,
+    plans,
+    account,
+    error,
+    loading,
+    refresh,
+    plansLoading: appLoading && !capabilities,
+    // A provider error only blocks plans when the metadata itself is missing;
+    // cached plans stay usable if a later project refresh fails.
+    plansError: !capabilities ? appLoadError : null,
+    retryPlans,
+  };
 }

@@ -269,6 +269,8 @@ export function ClipPreview({
   const { width, height } = useElementSize(containerRef);
   const [muted, setMuted] = useState(false);
   const [showGuides, setShowGuides] = useState(false);
+  const [mediaError, setMediaError] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
   const aspectValue = clip?.aspectRatio === '1:1' ? 1 : clip?.aspectRatio === '16:9' ? 16 / 9 : 9 / 16;
   const mode = renderMode ?? clip?.renderMode ?? clip?.export?.renderMode ?? 'default';
@@ -281,6 +283,7 @@ export function ClipPreview({
   const frameHeight = frameWidth > 0 ? frameWidth / aspectValue : 0;
 
   const hasSource = Boolean(sourceUrl) && variant === 'player';
+  const showPoster = !hasSource || mediaError;
 
   /*
    * Media time vs. clip time.
@@ -366,12 +369,20 @@ export function ClipPreview({
           className="relative overflow-hidden rounded-lg bg-black shadow-[0_18px_50px_-24px_rgba(0,0,0,0.9)]"
           style={{ width: frameWidth, height: frameHeight }}
         >
-          {hasSource ? (
+          {showPoster ? (
+            <PosterFrame
+              seed={clip?.posterSeed ?? 0}
+              label={mediaError ? 'Preview unavailable' : (clip?.title ?? 'Clip')}
+              sublabel={mediaError ? 'Source video could not be loaded' : sublabel}
+              aspectValue={aspectValue}
+            />
+          ) : (
             <>
               {isSplit ? (
                 <div className="absolute inset-0 grid grid-rows-2 bg-black">
                   <div className="relative overflow-hidden bg-black">
                     <video
+                      key={`split-source-${retryKey}`}
                       ref={videoRef}
                       src={sourceUrl}
                       playsInline
@@ -379,6 +390,8 @@ export function ClipPreview({
                       muted={muted}
                       className="absolute inset-0 size-full cursor-pointer object-cover"
                       aria-label={`Preview of ${clip?.title ?? 'clip'}`}
+                      onError={() => setMediaError(true)}
+                      onLoadedData={() => setMediaError(false)}
                     />
                   </div>
                   <div className="relative overflow-hidden border-t border-white/10 bg-ink-950">
@@ -394,6 +407,7 @@ export function ClipPreview({
               ) : (
                 <>
                   <video
+                    key={`source-${retryKey}`}
                     ref={videoRef}
                     src={sourceUrl}
                     playsInline
@@ -401,6 +415,8 @@ export function ClipPreview({
                     muted={muted}
                     className="absolute inset-0 size-full cursor-pointer object-contain"
                     aria-label={`Preview of ${clip?.title ?? 'clip'}`}
+                    onError={() => setMediaError(true)}
+                    onLoadedData={() => setMediaError(false)}
                   />
                   {showFacecam ? (
                     <video
@@ -431,13 +447,6 @@ export function ClipPreview({
                 {muted ? <VolumeX aria-hidden className="size-4" /> : <Volume2 aria-hidden className="size-4" />}
               </button>
             </>
-          ) : (
-            <PosterFrame
-              seed={clip?.posterSeed ?? 0}
-              label={clip?.title ?? 'Clip'}
-              sublabel={sublabel}
-              aspectValue={aspectValue}
-            />
           )}
 
           {showCaptions && frameWidth > 0 && !renderReady && (
@@ -500,7 +509,7 @@ export function ClipPreview({
             {showGuides ? 'Guides on' : 'Guides'}
           </button>
 
-          {hasSource && (
+          {hasSource && !mediaError && (
             <button
               type="button"
               onClick={() => onTogglePlay?.()}
@@ -523,11 +532,25 @@ export function ClipPreview({
       )}
 
       {/* Explains why a poster is being shown rather than real footage. */}
-      {!hasSource && variant === 'player' && (
-        <p className="absolute right-2 bottom-1 flex items-center gap-1 text-[10px] text-white/35">
-          <Captions aria-hidden className="size-3" />
-          Preview unavailable
-        </p>
+      {showPoster && variant === 'player' && (
+        <div className="absolute right-2 bottom-1 flex items-center gap-2 text-[10px] text-white/45">
+          <span className="flex items-center gap-1">
+            <Captions aria-hidden className="size-3" />
+            {mediaError ? 'Source unavailable — poster shown' : 'Preview unavailable'}
+          </span>
+          {mediaError && (
+            <button
+              type="button"
+              onClick={() => {
+                setMediaError(false);
+                setRetryKey((value) => value + 1);
+              }}
+              className="rounded border border-white/20 px-1.5 py-0.5 font-medium text-white/70 transition-colors hover:border-white/40 hover:text-white"
+            >
+              Retry
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

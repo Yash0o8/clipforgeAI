@@ -86,7 +86,7 @@ export function ClipCard({
           {/* Checkbox for bulk selection */}
           {showCheckbox && (
             <label
-              className="absolute top-2 left-2 z-10 flex size-6 cursor-pointer items-center justify-center rounded-md border border-white/25 bg-scrim/70 backdrop-blur-sm transition-opacity hover:border-white/50"
+              className="absolute top-2 left-2 z-20 flex size-6 cursor-pointer items-center justify-center rounded-md border border-white/25 bg-scrim/70 backdrop-blur-sm transition-opacity hover:border-white/50 focus-within:border-brand-400"
               title={isSelected ? 'Deselect clip' : 'Select clip'}
             >
               <input
@@ -98,7 +98,7 @@ export function ClipCard({
               />
               <span
                 aria-hidden
-                className={`flex size-4 items-center justify-center rounded border transition-colors peer-checked:border-brand-500 peer-checked:bg-brand-500 ${
+                className={`flex size-4 items-center justify-center rounded border transition-colors peer-checked:border-brand-500 peer-checked:bg-brand-500 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-400 ${
                   isSelected ? 'border-brand-500 bg-brand-500' : 'border-white/40 bg-transparent'
                 }`}
               >
@@ -111,7 +111,7 @@ export function ClipCard({
           <Link
             to={editorPath}
             aria-label={`Edit ${clip.title}`}
-            className="absolute inset-0 z-10 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-visible:opacity-100"
+            className="absolute inset-0 z-10 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
           >
             <span className="flex size-9 items-center justify-center rounded-full bg-scrim/70 text-white backdrop-blur-sm">
               <Play aria-hidden className="size-4 translate-x-px fill-current" />

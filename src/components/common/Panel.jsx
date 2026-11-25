@@ -17,12 +17,13 @@ export function Panel({ as: Component = 'section', className = '', raised = fals
  * Separating this from the body means every panel's title block aligns to the
  * same grid without repeating padding utilities.
  */
-export function PanelHeader({ title, subtitle, actions, children, className = '' }) {
+export function PanelHeader({ title, subtitle, description, actions, children, className = '' }) {
+  const helpText = subtitle ?? description;
   return (
     <header className={`flex flex-wrap items-start justify-between gap-3 px-4 pt-4 pb-3 sm:px-5 ${className}`}>
       <div className="min-w-0 flex-1">
         {title && <h2 className="text-sm font-semibold text-primary">{title}</h2>}
-        {subtitle && <p className="mt-0.5 text-[12.5px] leading-relaxed text-secondary">{subtitle}</p>}
+        {helpText && <p className="mt-0.5 text-[12.5px] leading-relaxed text-secondary">{helpText}</p>}
         {children}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

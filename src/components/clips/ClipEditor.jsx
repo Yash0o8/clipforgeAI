@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
@@ -96,7 +96,8 @@ function TranscriptPanel({ transcript, currentTime, onSeek }) {
  */
 export function ClipEditor({ clipId }) {
   const toast = useToast();
-  const { setClipStatus, patchClip, trackExport, patchExport, settings, capabilities } = useApp();
+  const navigate = useNavigate();
+  const { setClipStatus, discardClip, patchClip, trackExport, patchExport, settings, capabilities } = useApp();
   const { account } = useBilling();
   const watermarkRequired = Boolean(account?.entitlements?.watermarkRequired);
 
@@ -137,6 +138,7 @@ export function ClipEditor({ clipId }) {
    */
   const [job, setJob] = useState(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [activeJobKind, setActiveJobKind] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [vaultItems, setVaultItems] = useState([]);
   const [vaultCategory, setVaultCategory] = useState('all');
@@ -291,13 +293,17 @@ export function ClipEditor({ clipId }) {
     if (wrap.length) seek(wrap[0]);
   }, [draft, timelineMarkers, playhead, seek]);
 
-  // Editing shortcuts. Ignored while a text field has focus so typing captions
-  // never moves the playhead or changes a trim point.
+  // Editing shortcuts. Ignored while a form control, button, dialog or timeline
+  // handle has focus: Space must activate the focused control, not toggle play.
   useEffect(() => {
     const onKeyDown = (event) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const tag = event.target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) {
+      if (event.metaKey || event.ctrlKey || event.altKey || confirmDiscard) return;
+      const target = event.target;
+      if (
+        target?.closest?.(
+          'input, textarea, select, button, a, label, [contenteditable="true"], [role="radio"], [role="slider"], [role="switch"], [role="dialog"]'
+        )
+      ) {
         return;
       }
 
@@ -332,7 +338,7 @@ export function ClipEditor({ clipId }) {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [nudge, playhead, setTrim, jumpToNextMarker]);
+  }, [nudge, playhead, setTrim, jumpToNextMarker, confirmDiscard]);
 
   const onSave = () => {
     const saved = save();
@@ -406,8 +412,14 @@ export function ClipEditor({ clipId }) {
     const saved = save();
     if (!saved || isExporting) return;
     const exportSettings = { ...saved.export, ...overrides };
+    const kind = exportSettings.captionOnly
+      ? 'captions'
+      : exportSettings.preview
+        ? 'preview'
+        : 'hd';
 
     setIsExporting(true);
+    setActiveJobKind(kind);
     setJob({ status: 'queued', progress: 0, preview: Boolean(exportSettings.preview) });
 
     try {
@@ -426,6 +438,7 @@ export function ClipEditor({ clipId }) {
         renderMode: exportSettings.renderMode || 'default',
         backgroundAssetId: exportSettings.backgroundAssetId || undefined,
         preview: Boolean(exportSettings.preview),
+        captionOnly: Boolean(exportSettings.captionOnly),
         watermark: Boolean(exportSettings.watermark || exportSettings.preview || watermarkRequired),
         deviceId: getDeviceId(),
         autoZoom: Boolean(exportSettings.autoZoom),
@@ -447,10 +460,24 @@ export function ClipEditor({ clipId }) {
     }
   };
 
-  const onExport = () => queueRender({ preview: false, watermark: Boolean(draft?.export?.watermark) });
-  const onExportPreview = () => queueRender({ preview: true, watermark: true, resolution: '480x854', frameRate: 30 });
-  const onApproveHD = () => queueRender({ preview: false, watermark: Boolean(draft?.export?.watermark), resolution: '1080x1920', frameRate: 30 });
-  const onRerenderCaptions = () => queueRender({ captionOnly: true, burnCaptions: true, preview: Boolean(job?.preview) });
+  const onExport = () => {
+    setExportSettings({ preview: false });
+    queueRender({ preview: false, watermark: Boolean(draft?.export?.watermark) });
+  };
+
+  const onExportPreview = () => {
+    setExportSettings({ preview: true, watermark: true, resolution: '480x854', frameRate: 30 });
+    queueRender({ preview: true, watermark: true, resolution: '480x854', frameRate: 30 });
+  };
+
+  const onApproveHD = () => {
+    setExportSettings({ preview: false, resolution: '1080x1920', frameRate: 30 });
+    queueRender({ preview: false, watermark: Boolean(draft?.export?.watermark), resolution: '1080x1920', frameRate: 30 });
+  };
+
+  const onRerenderCaptions = () => {
+    queueRender({ captionOnly: true, burnCaptions: true, preview: Boolean(job?.preview) });
+  };
 
   /** Stop a queued or running render. */
   const onCancelExport = useCallback(async () => {
@@ -920,6 +947,8 @@ export function ClipEditor({ clipId }) {
             onDownloadTranscript={onDownloadTranscript}
             onDownloadProject={onDownloadProject}
             isExporting={isExporting}
+            progress={job?.progress ?? 0}
+            activeJobKind={activeJobKind}
             canExport={canExport}
             vaultItems={vaultItems}
             capabilities={capabilities}
@@ -943,7 +972,13 @@ export function ClipEditor({ clipId }) {
                 actions={
                   job.status === 'complete' ? (
                     <div className="flex items-center gap-2">
-                      <Button size="xs" variant="ghost" onClick={onRerenderCaptions} disabled={isExporting}>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={onRerenderCaptions}
+                        loading={isExporting && activeJobKind === 'captions'}
+                        disabled={isExporting}
+                      >
                         Re-render captions
                       </Button>
                       {job.preview && (
@@ -1015,21 +1050,36 @@ export function ClipEditor({ clipId }) {
         onConfirm={async () => {
           setConfirmDiscard(false);
           try {
-            await clipService.deleteClip(clip.id);
-            setClipStatus([clip.id], 'suggested');
-            toast.info('Clip returned to suggestions');
+            await discardClip(clip.id);
+            toast.success('Clip discarded');
+            navigate('/app/clips');
           } catch (error) {
             toast.error('Could not discard this clip', { body: error.message });
           }
         }}
-        title="Remove from selection?"
-        message="The clip stays in your library as a suggestion. This cannot be undone from here."
-        confirmLabel="Reset clip"
+        title="Discard this clip?"
+        message="This removes the clip from your library. Any unsaved edits are lost and this cannot be undone from here."
+        confirmLabel="Discard clip"
       />
 
-      <p className="flex items-center justify-center gap-1.5 pb-2 text-[11px] text-faint">
-        <Check aria-hidden className="size-3 text-success" />
-        Changes are saved to your ClipForge server.
+      <p
+        className={`flex items-center justify-center gap-1.5 pb-2 text-[11px] ${
+          isDirty ? 'text-warning' : 'text-faint'
+        }`}
+        role="status"
+        aria-live="polite"
+      >
+        {isDirty ? (
+          <>
+            <CircleAlert aria-hidden className="size-3" />
+            Unsaved changes — click Save clip to keep them.
+          </>
+        ) : (
+          <>
+            <Check aria-hidden className="size-3 text-success" />
+            Changes are saved to your ClipForge server.
+          </>
+        )}
       </p>
     </div>
   );

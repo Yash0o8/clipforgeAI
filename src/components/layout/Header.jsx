@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Bell,
@@ -66,7 +66,12 @@ function GlobalSearch({ onNavigate }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
-  const close = useDismiss(open, () => setOpen(false));
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const listboxId = `${useId()}-search-results`;
+  const close = useDismiss(open, () => {
+    setOpen(false);
+    setActiveIndex(-1);
+  });
 
   const results = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -97,11 +102,27 @@ function GlobalSearch({ onNavigate }) {
     return [...projectHits, ...clipHits];
   }, [query, projects, clips]);
 
+  const availableResults = query.trim().length >= 2 ? results ?? [] : [];
+  const highlightedIndex =
+    open && activeIndex >= 0 && activeIndex < availableResults.length ? activeIndex : -1;
+  const highlightedResult = highlightedIndex >= 0 ? availableResults[highlightedIndex] : null;
+
   const go = (to) => {
     setOpen(false);
     setQuery('');
+    setActiveIndex(-1);
     onNavigate?.();
     navigate(to);
+  };
+
+  const moveActive = (delta) => {
+    const count = availableResults.length;
+    if (!count) return;
+    setOpen(true);
+    setActiveIndex((current) => {
+      if (current < 0) return delta > 0 ? 0 : count - 1;
+      return (current + delta + count) % count;
+    });
   };
 
   return (
@@ -122,10 +143,29 @@ function GlobalSearch({ onNavigate }) {
           onChange={(event) => {
             setQuery(event.target.value);
             setOpen(true);
+            setActiveIndex(-1);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              if (!availableResults.length) return;
+              event.preventDefault();
+              moveActive(event.key === 'ArrowDown' ? 1 : -1);
+            } else if (event.key === 'Enter' && highlightedResult) {
+              event.preventDefault();
+              go(highlightedResult.to);
+            }
           }}
           onFocus={() => setOpen(true)}
           placeholder="Search projects and clips"
           aria-label="Search projects and clips"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          aria-activedescendant={
+            highlightedResult ? `${listboxId}-option-${highlightedIndex}` : undefined
+          }
           className="h-9 w-full rounded-lg border border-line-strong bg-ink-900 pl-9 pr-9 text-[13px] text-primary placeholder:text-faint transition-colors hover:border-line-hover focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25 focus:outline-none"
         />
         {query && (
@@ -134,6 +174,7 @@ function GlobalSearch({ onNavigate }) {
             onClick={() => {
               setQuery('');
               setOpen(false);
+              setActiveIndex(-1);
             }}
             aria-label="Clear search"
             className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-faint transition-colors hover:text-primary"
@@ -144,7 +185,12 @@ function GlobalSearch({ onNavigate }) {
       </form>
 
       {open && query.trim().length >= 2 && (
-        <div className="panel-raised absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-80 overflow-y-auto p-1.5 scrollbar-thin">
+        <div
+          id={listboxId}
+          role="listbox"
+          aria-label="Search results"
+          className="panel-raised absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-80 overflow-y-auto p-1.5 scrollbar-thin"
+        >
           {results === null ? null : results.length === 0 ? (
             <p className="px-3 py-6 text-center text-[13px] text-secondary">
               Nothing matches “{query.trim()}”.
@@ -152,59 +198,108 @@ function GlobalSearch({ onNavigate }) {
           ) : (
             <>
               {results.some((result) => result.type === 'project') && (
-                <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold tracking-widest text-faint uppercase">
+                <p
+                  role="presentation"
+                  className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold tracking-widest text-faint uppercase"
+                >
                   Projects
                 </p>
               )}
               {results
                 .filter((result) => result.type === 'project')
-                .map((result) => (
-                  <button
-                    key={result.id}
-                    type="button"
-                    onClick={() => go(result.to)}
-                    className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-ink-750"
-                  >
-                    <FolderClosed aria-hidden className="size-4 shrink-0 text-faint" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-medium text-primary">
-                        {result.title}
+                .map((result) => {
+                  const index = results.indexOf(result);
+                  const highlighted = highlightedIndex === index;
+                  return (
+                    <button
+                      key={result.id}
+                      id={`${listboxId}-option-${index}`}
+                      role="option"
+                      aria-selected={highlighted}
+                      type="button"
+                      onClick={() => go(result.to)}
+                      className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors ${
+                        highlighted ? 'bg-ink-750' : 'hover:bg-ink-750'
+                      }`}
+                    >
+                      <FolderClosed aria-hidden className="size-4 shrink-0 text-faint" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium text-primary">
+                          {result.title}
+                        </span>
+                        <span className="block truncate text-[11px] text-faint capitalize">
+                          {result.meta}
+                        </span>
                       </span>
-                      <span className="block truncate text-[11px] text-faint capitalize">
-                        {result.meta}
-                      </span>
-                    </span>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
 
               {results.some((result) => result.type === 'clip') && (
-                <p className="px-2.5 pt-2 pb-1 text-[10px] font-semibold tracking-widest text-faint uppercase">
+                <p
+                  role="presentation"
+                  className="px-2.5 pt-2 pb-1 text-[10px] font-semibold tracking-widest text-faint uppercase"
+                >
                   Clips
                 </p>
               )}
               {results
                 .filter((result) => result.type === 'clip')
-                .map((result) => (
-                  <button
-                    key={result.id}
-                    type="button"
-                    onClick={() => go(result.to)}
-                    className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-ink-750"
-                  >
-                    <Scissors aria-hidden className="size-4 shrink-0 text-faint" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-medium text-primary">
-                        {result.title}
+                .map((result) => {
+                  const index = results.indexOf(result);
+                  const highlighted = highlightedIndex === index;
+                  return (
+                    <button
+                      key={result.id}
+                      id={`${listboxId}-option-${index}`}
+                      role="option"
+                      aria-selected={highlighted}
+                      type="button"
+                      onClick={() => go(result.to)}
+                      className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors ${
+                        highlighted ? 'bg-ink-750' : 'hover:bg-ink-750'
+                      }`}
+                    >
+                      <Scissors aria-hidden className="size-4 shrink-0 text-faint" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium text-primary">
+                          {result.title}
+                        </span>
+                        <span className="block truncate text-[11px] text-faint">{result.meta}</span>
                       </span>
-                      <span className="block truncate text-[11px] text-faint">{result.meta}</span>
-                    </span>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
             </>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Shared notification content, used by both actionable and plain entries. */
+function NotificationContent({ item }) {
+  return (
+    <>
+      <span
+        aria-hidden
+        className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
+          item.read ? 'bg-transparent' : TONE_CLASSES[item.tone] ?? 'bg-brand-400'
+        }`}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-[13px] font-medium text-primary">{item.title}</span>
+          <span className="shrink-0 text-[10.5px] text-faint">
+            {formatRelativeTime(item.at)}
+          </span>
+        </span>
+        <span className="mt-0.5 block text-[12px] leading-relaxed text-secondary">
+          {item.body}
+        </span>
+      </span>
+    </>
   );
 }
 
@@ -255,40 +350,29 @@ function NotificationBell() {
               </p>
             ) : (
               <ul className="divide-y divide-line">
-                {notifications.map((item) => (
-                  <li key={item.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpen(false);
-                        if (item.type === 'project') navigate(`/app/projects/${item.projectId}`);
-                      }}
-                      className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-ink-800 ${
-                        item.read ? '' : 'bg-brand-500/[0.05]'
-                      }`}
-                    >
-                      <span
-                        aria-hidden
-                        className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
-                          item.read ? 'bg-transparent' : TONE_CLASSES[item.tone] ?? 'bg-brand-400'
-                        }`}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-baseline justify-between gap-2">
-                          <span className="truncate text-[13px] font-medium text-primary">
-                            {item.title}
-                          </span>
-                          <span className="shrink-0 text-[10.5px] text-faint">
-                            {formatRelativeTime(item.at)}
-                          </span>
-                        </span>
-                        <span className="mt-0.5 block text-[12px] leading-relaxed text-secondary">
-                          {item.body}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                {notifications.map((item) => {
+                  const actionable = item.type === 'project' && Boolean(item.projectId);
+                  return (
+                    <li key={item.id} className={item.read ? undefined : 'bg-brand-500/[0.05]'}>
+                      {actionable ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpen(false);
+                            navigate(`/app/projects/${item.projectId}`);
+                          }}
+                          className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-ink-800"
+                        >
+                          <NotificationContent item={item} />
+                        </button>
+                      ) : (
+                        <div className="flex items-start gap-3 px-4 py-3">
+                          <NotificationContent item={item} />
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>

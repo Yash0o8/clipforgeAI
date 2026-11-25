@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, ChevronRight, Download, Eye, Sparkles, Upload } from 'lucide-react';
 import { Button } from '../components/common/Button.jsx';
 import { Panel, PanelBody, PanelHeader } from '../components/common/Panel.jsx';
+import { ErrorState } from '../components/common/EmptyState.jsx';
+import { LoaderBlock } from '../components/common/Loader.jsx';
 import { formatClock, formatDate } from '../utils/formatDuration.js';
 import { useApp } from '../hooks/useApp.js';
-import { CLIP_STATUS, PROJECT_STATUS } from '../utils/constants.js';
+import { CLIP_STATUS, PROJECT_STATUS, PROJECT_STATUS_META } from '../utils/constants.js';
 
 /** Recent highlights pulled from the latest projects. */
 function Highlights({ clips }) {
@@ -42,7 +44,6 @@ function Highlights({ clips }) {
                 </Link>
                 <div className="mt-0.5 flex items-center gap-2 text-[11px] text-faint">
                   <span className="tabular">{formatClock(clip.startSec)}  {formatClock(clip.endSec)}</span>
-                  <span aria-hidden></span>
                   <span className="font-medium text-success">{clip.score}%</span>
                 </div>
               </div>
@@ -120,10 +121,8 @@ function RecentProjects({ projects }) {
               </Link>
               <div className="mt-0.5 flex items-center gap-2 text-[11px] text-faint">
                 <span>{formatDate(project.createdAt)}</span>
-                <span aria-hidden></span>
                 <span className="tabular">{formatClock(project.durationSec)}</span>
-                <span aria-hidden></span>
-                <span>{project.status === 'ready' ? 'Ready' : project.status}</span>
+                <span>{PROJECT_STATUS_META[project.status]?.label ?? 'Unknown'}</span>
               </div>
             </div>
             <div className="flex items-center gap-1.5">
@@ -131,7 +130,7 @@ function RecentProjects({ projects }) {
                 <Eye aria-hidden className="size-3.5" />
                 View
               </Button>
-              {project.status === 'ready' && (
+              {project.status === PROJECT_STATUS.READY && (
                 <Button as={Link} to={`/app/projects/${project.id}#clips`} size="xs" variant="secondary">
                   Clips
                 </Button>
@@ -152,13 +151,28 @@ function RecentProjects({ projects }) {
  * fetched for every ready project on mount.
  */
 export function OverviewPage() {
-  const { projects, clips, ensureClips } = useApp();
+  const { projects, clips, ensureClips, isLoading, loadError, refreshProjects } = useApp();
 
   useEffect(() => {
     for (const project of projects) {
       if (project.status === PROJECT_STATUS.READY) ensureClips(project.id).catch(() => {});
     }
   }, [projects, ensureClips]);
+
+  if (isLoading) {
+    return <LoaderBlock label="Loading overview" hint="Fetching your projects and highlights." />;
+  }
+
+  if (loadError) {
+    return (
+      <ErrorState
+        title="Could not load overview"
+        message={loadError.message ?? 'The API did not answer. Try again.'}
+        onRetry={() => { void refreshProjects().catch(() => {}); }}
+        retryLabel="Retry"
+      />
+    );
+  }
 
   return (
     <div className="space-y-5">

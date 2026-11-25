@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMemo, useState } from 'react';
 import {
   CheckCircle,
@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { Panel, PanelHeader, PanelBody } from '../components/common/Panel.jsx';
 import { Button } from '../components/common/Button.jsx';
+import { EmptyState, ErrorState } from '../components/common/EmptyState.jsx';
+import { LoaderBlock } from '../components/common/Loader.jsx';
 import { SegmentedControl } from '../components/common/SegmentedControl.jsx';
 import { TextField } from '../components/common/TextField.jsx';
 import { Select } from '../components/common/Select.jsx';
@@ -17,6 +19,7 @@ import { ConfirmDialog } from '../components/common/Modal.jsx';
 import { ClipGrid } from '../components/clips/ClipGrid.jsx';
 import { useClips } from '../hooks/useClips.js';
 import { useApp } from '../hooks/useApp.js';
+import { useToast } from '../hooks/useToast.js';
 import { CLIP_FILTERS, CLIP_SORTS, CLIP_STATUS } from '../utils/constants.js';
 
 /** `Select` reads `value`/`label`, so the sort constants need remapping. */
@@ -31,6 +34,8 @@ const SORT_OPTIONS = CLIP_SORTS.map((option) => ({ value: option.id, label: opti
  */
 export function ClipsPage() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const toast = useToast();
   const projectId = searchParams.get('projectId') || undefined;
 
   const {
@@ -47,9 +52,12 @@ export function ClipsPage() {
     getProjectForClip,
     toggleSelect,
     applyToVisible,
+    clipsLoading,
+    clipsError,
+    reload,
   } = useClips({ projectId });
 
-  const { setClipStatus, discardClip } = useApp();
+  const { discardClip, isLoading, loadError, refreshProjects } = useApp();
   const [bulkOpen, setBulkOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -59,6 +67,74 @@ export function ClipsPage() {
   );
 
   const canBulkExport = selectedIds.length > 0;
+  const loading = isLoading || clipsLoading;
+  const failed = Boolean(loadError || clipsError);
+
+  const onDiscardOne = async (id) => {
+    try {
+      await discardClip(id);
+      toast.success('Clip discarded');
+    } catch (error) {
+      toast.error('Could not discard the clip', { body: error.message });
+    }
+  };
+
+  const onDiscardVisible = async () => {
+    setDeleteOpen(false);
+    try {
+      const result = await applyToVisible('remove');
+      if (result.failed > 0) {
+        toast.warning('Some clips could not be discarded', {
+          body: `${result.succeeded} removed, ${result.failed} failed.`,
+        });
+      } else {
+        toast.success(`${result.succeeded} clip${result.succeeded === 1 ? '' : 's'} discarded`);
+      }
+    } catch (error) {
+      toast.error('Could not discard clips', { body: error.message });
+    }
+  };
+
+  const onBulkExport = () => {
+    setBulkOpen(false);
+    if (selectedIds[0]) navigate(`/app/clips/${selectedIds[0]}/editor`);
+  };
+
+  const listContent = loading ? (
+    <LoaderBlock label="Loading clips" hint="Fetching highlights from your finished projects." />
+  ) : failed && clips.length === 0 ? (
+    <ErrorState
+      title="Could not load clips"
+      message={(clipsError ?? loadError)?.message ?? 'The API did not answer. Try again.'}
+      onRetry={() => {
+        reload();
+        refreshProjects().catch(() => {});
+      }}
+      retryLabel="Retry"
+    />
+  ) : clips.length === 0 ? (
+    <EmptyState
+      icon={<Sparkles className="size-5" />}
+      title="No clips here yet"
+      description="Generate clips from a finished project, or change the filters above."
+      action={
+        <Button as={Link} to="/app/upload">
+          Upload a video
+        </Button>
+      }
+    />
+  ) : (
+    <ClipGrid
+      clips={clips}
+      view={view}
+      projectForClip={getProjectForClip}
+      selectedIds={selectedIds}
+      onToggleSelect={toggleSelect}
+      onDelete={onDiscardOne}
+      onExport={(id) => navigate(`/app/clips/${id}/editor`)}
+      canExport={true}
+    />
+  );
 
   return (
     <div className="space-y-4">
@@ -86,7 +162,7 @@ export function ClipsPage() {
       <Panel>
         <PanelHeader title="Filters" />
         <PanelBody className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
+          <div role="group" aria-label="Clip filters" className="flex flex-wrap items-center gap-2">
             {CLIP_FILTERS.map((item) => {
               const count = counts[item.id] ?? 0;
               const active = filter === item.id;
@@ -94,6 +170,7 @@ export function ClipsPage() {
                 <button
                   key={item.id}
                   type="button"
+                  aria-pressed={active}
                   onClick={() => setFilter(item.id)}
                   className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-400 ${
                     active
@@ -132,6 +209,7 @@ export function ClipsPage() {
             <div className="flex flex-col justify-end gap-2">
               <label className="text-[13px] font-medium text-secondary">View</label>
               <SegmentedControl
+                label="Clip layout"
                 options={[
                   { value: 'grid', label: 'Grid', icon: <Grid aria-hidden className="size-3.5" /> },
                   { value: 'list', label: 'List', icon: <List aria-hidden className="size-3.5" /> },
@@ -164,16 +242,7 @@ export function ClipsPage() {
         </PanelBody>
       </Panel>
 
-      <ClipGrid
-        clips={clips}
-        view={view}
-        projectForClip={getProjectForClip}
-        selectedIds={selectedIds}
-        onToggleSelect={toggleSelect}
-        onDelete={(id) => discardClip(id).catch(() => {})}
-        onExport={(id) => setClipStatus([id], CLIP_STATUS.EXPORTED)}
-        canExport={true}
-      />
+      {listContent}
 
       <div className="flex items-center justify-between">
         <p className="text-[12px] text-faint">
@@ -188,10 +257,7 @@ export function ClipsPage() {
       <ConfirmDialog
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
-        onConfirm={() => {
-          applyToVisible('remove');
-          setDeleteOpen(false);
-        }}
+        onConfirm={onDiscardVisible}
         title="Discard visible clips?"
         message="These clips will be removed from this library. Any unsaved edits are lost."
         confirmLabel="Discard"
@@ -201,12 +267,11 @@ export function ClipsPage() {
       <ConfirmDialog
         open={bulkOpen}
         onClose={() => setBulkOpen(false)}
-        onConfirm={() => {
-          setBulkOpen(false);
-        }}
+        onConfirm={onBulkExport}
+        tone="brand"
         title="Export selected clips"
-        message="Use the clip editor to choose formats and render options. Sidecars (.SRT, .TXT, .JSON) are ready to download now."
-        confirmLabel="Go to editor"
+        message={`Open the editor for the first of ${selectedIds.length} selected clips. Choose your format there, then export; caption sidecars stay downloadable in the browser.`}
+        confirmLabel="Open editor"
         cancelLabel="Close"
       />
     </div>

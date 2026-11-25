@@ -147,6 +147,7 @@ export const CLIP_STATUS = {
   SELECTED: 'selected',
   EDITED: 'edited',
   EXPORTED: 'exported',
+  DISCARDED: 'discarded',
 };
 
 export const CLIP_STATUS_META = {
@@ -154,6 +155,9 @@ export const CLIP_STATUS_META = {
   [CLIP_STATUS.SELECTED]: { label: 'Selected', tone: 'brand' },
   [CLIP_STATUS.EDITED]: { label: 'Edited', tone: 'info' },
   [CLIP_STATUS.EXPORTED]: { label: 'Exported', tone: 'success' },
+  // Discarded clips are removed on the server; the local row stays until the
+  // next reload so the action has visible feedback instead of silently vanishing.
+  [CLIP_STATUS.DISCARDED]: { label: 'Discarded', tone: 'warning' },
 };
 
 /** Filter tabs on the Clips page. */
@@ -162,6 +166,7 @@ export const CLIP_FILTERS = [
   { id: CLIP_STATUS.SELECTED, label: 'Selected' },
   { id: CLIP_STATUS.EDITED, label: 'Edited' },
   { id: CLIP_STATUS.EXPORTED, label: 'Exported' },
+  { id: CLIP_STATUS.DISCARDED, label: 'Discarded' },
 ];
 
 export const CLIP_SORTS = [

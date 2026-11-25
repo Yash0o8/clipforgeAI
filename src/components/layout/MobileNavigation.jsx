@@ -30,7 +30,7 @@ export function MobileNavigation() {
               <NavLink
                 to={item.to}
                 className={({ isActive }) =>
-                  `flex flex-col items-center gap-1 px-1 pt-2.5 pb-2 text-[10.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-400 ${
+                  `relative flex flex-col items-center gap-1 px-1 pt-2.5 pb-2 text-[10.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-400 ${
                     isActive ? 'text-brand-400' : 'text-faint hover:text-secondary'
                   }`
                 }

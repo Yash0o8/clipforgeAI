@@ -33,6 +33,7 @@ export function ExportSettings({
   onDownloadProject,
   isExporting = false,
   progress = 0,
+  activeJobKind = null,
   canExport = true,
   vaultItems = [],
   capabilities = null,
@@ -53,6 +54,14 @@ export function ExportSettings({
   const selectedVaultItem = vaultItems.find((item) => item.id === selectedVaultId);
 
   const estimated = estimateSize({ durationSec: clip?.durationSec ?? 0, width, height });
+  const previewBusy = isExporting && (activeJobKind === 'preview' || (!activeJobKind && settings.preview));
+  const hdBusy = isExporting && (activeJobKind === 'hd' || (!activeJobKind && !settings.preview));
+  const progressLabel =
+    activeJobKind === 'captions'
+      ? 're-rendering captions'
+      : activeJobKind === 'preview' || (!activeJobKind && settings.preview)
+        ? 'rendering preview'
+        : 'encoding HD';
 
   return (
     <Panel className={className}>
@@ -275,7 +284,7 @@ export function ExportSettings({
             size="md"
             variant="secondary"
             onClick={onExportPreview}
-            loading={isExporting && Boolean(settings.preview)}
+            loading={previewBusy}
             disabled={!canExport || isExporting}
           >
             <Wand2 aria-hidden className="size-4" />
@@ -285,10 +294,10 @@ export function ExportSettings({
             fullWidth
             size="md"
             onClick={() => onExport?.()}
-            loading={isExporting && !settings.preview}
+            loading={hdBusy}
             disabled={!canExport || isExporting}
           >
-            {isExporting && !settings.preview ? (
+            {hdBusy ? (
               <>
                 <Loader aria-hidden className="size-4 animate-spin" />
                 Queueing render…
@@ -303,7 +312,9 @@ export function ExportSettings({
         </div>
 
         {isExporting && (
-          <p className="tabular text-center text-[11px] text-faint">{Math.round(progress)}% queued</p>
+          <p className="tabular text-center text-[11px] text-faint" aria-live="polite">
+            {Math.round(progress)}% {progressLabel}
+          </p>
         )}
 
         {/* --- Real, working downloads --- */}

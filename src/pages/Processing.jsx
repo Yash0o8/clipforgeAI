@@ -1,5 +1,5 @@
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   Activity,
   Check,
@@ -15,8 +15,10 @@ import { Panel, PanelHeader, PanelBody } from '../components/common/Panel.jsx';
 import { Button } from '../components/common/Button.jsx';
 import { ProgressBar } from '../components/common/ProgressBar.jsx';
 import { ErrorState } from '../components/common/EmptyState.jsx';
+import { LoaderBlock } from '../components/common/Loader.jsx';
 import { Badge } from '../components/common/Badge.jsx';
 import { useProcessing } from '../hooks/useProcessing.js';
+import { useApp } from '../hooks/useApp.js';
 import {
   formatClock,
   formatDurationLong,
@@ -34,8 +36,12 @@ import { PROCESSING_STAGE_META, PROJECT_STATUS } from '../utils/constants.js';
 export function ProcessingPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
-  const ranRef = useRef(false);
+  // Tracks the last project we attempted to start, so a late-arriving project
+  // on a direct load still gets exactly one auto-start attempt.
+  const startedProjectIdRef = useRef(null);
+  const startPendingRef = useRef(false);
 
+  const { isLoading, loadError, refreshProjects } = useApp();
   const processing = useProcessing(projectId);
   const {
     project,
@@ -58,28 +64,52 @@ export function ProcessingPage() {
     lastUpdateAgeSec,
   } = processing;
 
-  // Auto-start once on mount so arriving from the upload flow just works.
-  useEffect(() => {
-    if (ranRef.current) return;
-    ranRef.current = true;
-    if (project) start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const handleStart = useCallback(() => {
+    if (!projectId || startPendingRef.current) return;
+    startPendingRef.current = true;
+    startedProjectIdRef.current = projectId;
+    void Promise.resolve(start()).finally(() => {
+      startPendingRef.current = false;
+    });
+  }, [projectId, start]);
 
-  // Let the toast stack breathe before leaving for the project detail.
+  const storeProjectId = project?.id;
+  const canManuallyStart =
+    (status === PROJECT_STATUS.DRAFT || status === PROJECT_STATUS.UPLOADING) &&
+    !isRunning &&
+    !needsResume;
+
+  // Auto-start once per project. On a direct load `project` can be null on the
+  // first render, so wait for it rather than burning the one-shot guard. Jobs
+  // that were already processing are resumed by useProcessing's poll effect.
+  useEffect(() => {
+    if (!storeProjectId || storeProjectId !== projectId) return;
+    if (startedProjectIdRef.current === projectId) return;
+    if (status !== PROJECT_STATUS.DRAFT) return;
+    handleStart();
+  }, [storeProjectId, projectId, status, handleStart]);
+
+  // Keep the completion view on screen long enough to read and announce it.
   useEffect(() => {
     if (status !== PROJECT_STATUS.READY) return undefined;
-    const timer = setTimeout(() => navigate(`/app/projects/${projectId}`), 600);
+    const timer = setTimeout(() => navigate(`/app/projects/${projectId}`), 2200);
     return () => clearTimeout(timer);
   }, [status, navigate, projectId]);
+
+  if (!project && isLoading) {
+    return <LoaderBlock label="Loading project" hint="Fetching the latest job status." />;
+  }
 
   if (!project) {
     return (
       <ErrorState
-        title="Project not found"
-        message="The processing job no longer exists."
-        onRetry={() => navigate('/app/projects')}
-        retryLabel="Back to projects"
+        title={loadError ? 'Could not load this project' : 'Project not found'}
+        message={loadError?.message ?? 'The processing job no longer exists.'}
+        onRetry={() => {
+          if (loadError) refreshProjects().catch(() => {});
+          else navigate('/app/projects');
+        }}
+        retryLabel={loadError ? 'Retry' : 'Back to projects'}
       />
     );
   }
@@ -158,9 +188,13 @@ export function ProcessingPage() {
 
             <div className="w-full max-w-lg space-y-3">
               <ProgressBar value={progress} />
-              <div className="flex items-center justify-between text-[11.5px] text-faint">
+              <div
+                className="flex items-center justify-between text-[11.5px] text-faint"
+                aria-live="polite"
+                aria-atomic="true"
+              >
                 <span className="tabular">{Math.round(progress)}% overall</span>
-                <span className="capitalize">{completed ? 'done' : (currentStage?.key ?? 'idle')}</span>
+                <span className="capitalize">{completed ? 'complete' : (currentStage?.key ?? 'idle')}</span>
               </div>
 
               {showTranscriptDetail && (
@@ -178,7 +212,7 @@ export function ProcessingPage() {
                   </div>
                   <ProgressBar value={transcriptPercent} label="Transcript progress" showValue />
                   {stalled && (
-                    <p className="mt-2 text-[11px] text-warning">
+                    <p role="status" className="mt-2 text-[11px] text-warning">
                       No update for {lastUpdateAgeSec}s. The worker may still be loading the
                       model or encoding a long segment — progress resumes automatically.
                     </p>
@@ -262,9 +296,9 @@ export function ProcessingPage() {
             ))}
           </ol>
 
-          <p className="text-center text-[11px] text-faint">
+          <p className="text-center text-[11px] text-faint" aria-live="polite" aria-atomic="true">
             {completed
-              ? 'All stages finished.'
+              ? 'Processing complete. All stages finished.'
               : stopped
                 ? 'Retry to start again from the first stage.'
                 : isRunning
@@ -306,6 +340,13 @@ export function ProcessingPage() {
                   Stop
                 </Button>
               )}
+            </div>
+          ) : canManuallyStart ? (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button onClick={handleStart}>
+                <Sparkles aria-hidden className="size-4" />
+                Start processing
+              </Button>
             </div>
           ) : null}
         </PanelBody>

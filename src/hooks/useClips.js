@@ -20,6 +20,12 @@ export function useClips({ projectId } = {}) {
   const [sort, setSort] = useState('relevance');
   const [query, setQuery] = useState('');
   const [view, setView] = useState('grid');
+  const [clipsLoading, setClipsLoading] = useState(false);
+  const [clipsError, setClipsError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  /** Re-run the clip fetch after a failed load. */
+  const reload = useCallback(() => setReloadKey((value) => value + 1), []);
 
   // Clips are a separate collection from projects, so nothing is loaded until a
   // page asks for it. Without this the library renders empty on a reload even
@@ -34,8 +40,29 @@ export function useClips({ projectId } = {}) {
 
   useEffect(() => {
     const targets = projectId ? [projectId] : readyProjectIds;
-    for (const id of targets) ensureClips(id).catch(() => {});
-  }, [projectId, readyProjectIds, ensureClips]);
+    if (targets.length === 0) return undefined;
+
+    let active = true;
+    // Promise boundary keeps the loading flag off the synchronous effect path.
+    Promise.resolve().then(() => {
+      if (!active) return;
+      setClipsLoading(true);
+      setClipsError(null);
+      Promise.allSettled(targets.map((id) => ensureClips(id)))
+        .then((results) => {
+          if (!active) return;
+          const failed = results.find((result) => result.status === 'rejected');
+          setClipsError(failed?.reason ?? null);
+        })
+        .finally(() => {
+          if (active) setClipsLoading(false);
+        });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [projectId, readyProjectIds, ensureClips, reloadKey]);
 
   /** Scope to one project when a project id is supplied. */
   const scoped = useMemo(
@@ -46,7 +73,12 @@ export function useClips({ projectId } = {}) {
   /** Counts per filter tab, computed against the project scope. */
   const counts = useMemo(() => {
     const base = { all: scoped.length };
-    for (const key of [CLIP_STATUS.SELECTED, CLIP_STATUS.EDITED, CLIP_STATUS.EXPORTED]) {
+    for (const key of [
+      CLIP_STATUS.SELECTED,
+      CLIP_STATUS.EDITED,
+      CLIP_STATUS.EXPORTED,
+      CLIP_STATUS.DISCARDED,
+    ]) {
       base[key] = scoped.filter((clip) => clip.status === key).length;
     }
     return base;
@@ -106,15 +138,20 @@ export function useClips({ projectId } = {}) {
 
   /** Bulk action for the grid: select or discard every visible clip. */
   const applyToVisible = useCallback(
-    (action) => {
+    async (action) => {
       const ids = filtered.map((clip) => clip.id);
-      if (ids.length === 0) return;
+      if (ids.length === 0) return { succeeded: 0, failed: 0 };
+
       if (action === 'select') setClipStatus(ids, CLIP_STATUS.SELECTED);
       if (action === 'deselect') setClipStatus(ids, CLIP_STATUS.SUGGESTED);
       if (action === 'remove') {
-        // Fire-and-forget: one failure should not abort the rest of the batch.
-        ids.forEach((id) => discardClip(id).catch(() => {}));
+        // One failure must not abort the rest of the batch, but the caller still
+        // needs an accurate success/failure count to show in a toast.
+        const results = await Promise.allSettled(ids.map((id) => discardClip(id)));
+        const succeeded = results.filter((result) => result.status === 'fulfilled').length;
+        return { succeeded, failed: results.length - succeeded };
       }
+      return { succeeded: ids.length, failed: 0 };
     },
     [filtered, setClipStatus, discardClip]
   );
@@ -131,6 +168,9 @@ export function useClips({ projectId } = {}) {
     setQuery,
     view,
     setView,
+    clipsLoading,
+    clipsError,
+    reload,
     getClip,
     getProjectForClip,
     toggleSelect,

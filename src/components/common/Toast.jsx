@@ -10,28 +10,28 @@ const TONES = {
 };
 
 /**
- * Fixed-position toast stack. Mounted once in `AppLayout`.
+ * Fixed-position toast stack. Mounted once in `App.jsx`.
  *
- * `aria-live="polite"` means screen readers announce new toasts without
- * interrupting whatever the user is doing.
+ * Danger toasts use an assertive live region; other tones use a polite one so
+ * screen readers announce updates without interrupting the user.
  */
 export function ToastViewport() {
   const { toasts, dismiss } = useToast();
 
   return (
-    <div
-      aria-live="polite"
-      aria-atomic="false"
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex flex-col items-center gap-2 p-4 pb-safe sm:inset-x-auto sm:right-0 sm:items-end sm:p-5"
-    >
+    <div className="pointer-events-none fixed inset-x-0 bottom-16 z-40 flex flex-col items-center gap-2 p-4 pb-safe sm:inset-x-auto sm:right-0 sm:bottom-0 sm:items-end sm:p-5">
       <AnimatePresence initial={false}>
         {toasts.map((toast) => {
           const tone = TONES[toast.tone] ?? TONES.info;
           const Icon = tone.icon;
+          const assertive = toast.tone === 'danger';
 
           return (
             <motion.div
               key={toast.id}
+              role={assertive ? 'alert' : 'status'}
+              aria-live={assertive ? 'assertive' : 'polite'}
+              aria-atomic="true"
               layout
               initial={{ opacity: 0, y: 16, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}

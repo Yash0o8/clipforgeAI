@@ -203,7 +203,7 @@ export function ConfirmDialog({
             onClick={onConfirm}
             disabled={busy}
             className={`h-9 rounded-lg px-3.5 text-[13px] font-semibold text-white transition-colors disabled:opacity-50 ${
-              tone === 'danger' ? 'bg-red-600 hover:bg-red-500' : 'bg-brand-500 hover:bg-brand-400'
+              tone === 'danger' ? 'bg-danger hover:bg-danger/80' : 'bg-brand-500 hover:bg-brand-400'
             }`}
           >
             {confirmLabel}

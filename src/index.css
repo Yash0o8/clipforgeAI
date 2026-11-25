@@ -197,6 +197,14 @@
    Base
    ========================================================================== */
 @layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  [data-theme='light'] {
+    color-scheme: light;
+  }
+
   *,
   *::before,
   *::after {
@@ -206,6 +214,8 @@
   html {
     -webkit-text-size-adjust: 100%;
     scrollbar-color: var(--color-ink-700) transparent;
+    /* Sticky app header must never cover a focused control or anchored section. */
+    scroll-padding-top: 5.5rem;
   }
 
   body {
@@ -247,6 +257,20 @@
   ::selection {
     background-color: color-mix(in oklab, var(--color-brand-500) 35%, transparent);
     color: #fff;
+  }
+
+  ::placeholder {
+    color: var(--color-faint);
+    opacity: 0.8;
+  }
+
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
+  [hidden] {
+    display: none !important;
   }
 
   /* Number readouts (timestamps, scores, counters) line up in columns. */
