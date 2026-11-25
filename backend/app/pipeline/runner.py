@@ -175,6 +175,86 @@ def extract_audio(
 # --- Clip construction ------------------------------------------------------
 
 
+def _sfx_token(value: Any) -> str:
+    """Normalise a keyword/transcript word for SFX matching."""
+    text = str(value or "").strip().lower()
+    return "".join(ch for ch in text if ch.isalnum() or ch in "'").strip("'")
+
+
+def build_sfx_markers(
+    candidate: Candidate,
+    transcript: Sequence[Segment],
+    project_settings: dict[str, Any] | None = None,
+    *,
+    max_markers: int = 12,
+) -> list[dict[str, Any]]:
+    """Build subtle SFX cues from spikes, fast cuts and keyword hits.
+
+    Times are clip-relative so the renderer can remap them after dead-air
+    removal. Impact cues win over whooshes, and whooshes over keyword pops, so
+    the limited number of mixed cues keeps the strongest signals.
+    """
+    settings = project_settings or {}
+    start = float(candidate.start_sec or 0.0)
+    end = float(candidate.end_sec or 0.0)
+    duration = max(0.1, end - start)
+    raw: list[dict[str, Any]] = []
+
+    spikes = settings.get("audioSpikes")
+    if isinstance(spikes, list):
+        for spike in spikes[:6]:
+            if not isinstance(spike, dict):
+                continue
+            try:
+                t = float(spike.get("t", 0.0)) - start
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= t <= duration:
+                raw.append({"t": round(t, 3), "type": "impact", "source": "audio_spike"})
+
+    cuts = settings.get("sceneCuts")
+    if isinstance(cuts, list):
+        for cut in cuts[:4]:
+            try:
+                t = float(cut) - start
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= t <= duration:
+                raw.append({"t": round(t, 3), "type": "whoosh", "source": "scene_cut"})
+
+    keywords = {_sfx_token(word) for word in (getattr(candidate, "keywords", []) or [])}
+    keywords = {word for word in keywords if len(word) >= 3}
+    used: set[str] = set()
+    if keywords:
+        for segment in transcript:
+            for word in getattr(segment, "words", []) or []:
+                key = _sfx_token(getattr(word, "text", ""))
+                if len(key) < 3 or key not in keywords or key in used:
+                    continue
+                try:
+                    t = float(getattr(word, "start_sec", 0.0)) - start
+                except (TypeError, ValueError):
+                    continue
+                if 0.0 <= t <= duration:
+                    used.add(key)
+                    raw.append({"t": round(t, 3), "type": "pop", "source": "keyword"})
+                    if len(used) >= 4:
+                        break
+            if len(used) >= 4:
+                break
+
+    priority = {"impact": 0, "whoosh": 1, "pop": 2}
+    raw.sort(key=lambda marker: (priority.get(marker["type"], 3), marker["t"]))
+    selected: list[dict[str, Any]] = []
+    for marker in raw:
+        if any(abs(marker["t"] - kept["t"]) < 0.25 for kept in selected):
+            continue
+        selected.append(marker)
+        if len(selected) >= max_markers:
+            break
+    return sorted(selected, key=lambda marker: marker["t"])
+
+
 def build_clips(
     candidates: Sequence[Candidate],
     transcript: list[Segment],
@@ -250,6 +330,7 @@ def build_clips(
                         "keywords": getattr(candidate, "keywords", []) or [],
                         "hashtags": getattr(candidate, "hashtags", []) or [],
                         "description": getattr(candidate, "description", "") or candidate.hook,
+                        "sfxMarkers": build_sfx_markers(candidate, window, project_settings),
                         "reason": candidate.components.get("reason", "") if isinstance(candidate.components, dict) else "",
                         "projectPreset": preset,
                         "renderMode": render_mode,

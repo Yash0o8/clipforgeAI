@@ -25,6 +25,71 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 
+def run_youtube_ingest(
+    url: str,
+    project_id: str,
+    job_id: str,
+    context: JobContext,
+):
+    """Download a URL into an existing project row.
+
+    Shared by the inline queue and the Celery worker so both backends run the
+    exact same ingest code. Uses its own session: a worker thread/process must
+    never reuse the request-scoped session that created the project.
+    """
+    settings = get_settings()
+    db = session_factory()
+    try:
+        prj = db.query(Project).filter(Project.id == project_id).first()
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not prj:
+            return None
+        try:
+            if job:
+                job.status = "running"
+                job.stage = "upload"
+                job.progress = 1.0
+            context.report("upload", 1.0)
+            path, info = _download_youtube(url, settings.upload_dir / "youtube")
+            safe_name = sanitize_name(info.get("title") or path.name, fallback=path.name)
+            final = path
+            rel = str(final.relative_to(settings.data_dir)).replace("\\", "/")
+            media = probe(final)
+            prj.asset_path = rel
+            prj.file_name = safe_name
+            prj.file_size = final.stat().st_size if final.exists() else None
+            prj.mime_type = "video/mp4"
+            prj.duration_sec = media.duration_sec or 0.0
+            prj.width = media.width
+            prj.height = media.height
+            prj.asset_kind = "audio" if not media.has_video else "video"
+            prj.title = prj.title or sanitize_name(info.get("title") or "YouTube import")
+            prj.status = "draft"
+            prj.progress = 0.0
+            prj.current_stage = "upload"
+            prj.error = None
+            prj.updated_at = utcnow()
+            if job:
+                job.status = "complete"
+                job.progress = 100.0
+                job.stage = "upload"
+                job.updated_at = utcnow()
+            db.commit()
+            return {"projectId": project_id, "assetPath": rel}
+        except Exception as exc:
+            prj.status = "failed"
+            prj.error = str(exc)
+            prj.updated_at = utcnow()
+            if job:
+                job.status = "failed"
+                job.error = str(exc)
+                job.updated_at = utcnow()
+            db.commit()
+            raise
+    finally:
+        db.close()
+
+
 def _download_youtube(url: str, dest_dir: Path) -> tuple[Path, dict]:
     try:
         import yt_dlp  # type: ignore
@@ -93,55 +158,7 @@ def ingest_youtube(payload: YouTubeIngestRequest, session: Session = Depends(get
     queue = get_queue()
 
     def body(ctx: JobContext):
-        db = session_factory()
-        try:
-            prj = db.query(Project).filter(Project.id == project.id).first()
-            job = db.query(Job).filter(Job.id == db_job.id).first()
-            if not prj:
-                return
-            try:
-                if job:
-                    job.status = "running"
-                    job.stage = "upload"
-                    job.progress = 1.0
-                ctx.report("upload", 1.0)
-                path, info = _download_youtube(url, settings.upload_dir / "youtube")
-                safe_name = sanitize_name(info.get("title") or path.name, fallback=path.name)
-                final = path
-                rel = str(final.relative_to(settings.data_dir)).replace("\\", "/")
-                media = probe(final)
-                prj.asset_path = rel
-                prj.file_name = safe_name
-                prj.file_size = final.stat().st_size if final.exists() else None
-                prj.mime_type = "video/mp4"
-                prj.duration_sec = media.duration_sec or 0.0
-                prj.width = media.width
-                prj.height = media.height
-                prj.asset_kind = "audio" if not media.has_video else "video"
-                prj.title = prj.title or sanitize_name(info.get("title") or "YouTube import")
-                prj.status = "draft"
-                prj.progress = 0.0
-                prj.current_stage = "upload"
-                prj.error = None
-                prj.updated_at = utcnow()
-                if job:
-                    job.status = "complete"
-                    job.progress = 100.0
-                    job.stage = "upload"
-                    job.updated_at = utcnow()
-                db.commit()
-            except Exception as exc:
-                prj.status = "failed"
-                prj.error = str(exc)
-                prj.updated_at = utcnow()
-                if job:
-                    job.status = "failed"
-                    job.error = str(exc)
-                    job.updated_at = utcnow()
-                db.commit()
-                raise
-        finally:
-            db.close()
+        return run_youtube_ingest(url, project.id, db_job.id, ctx)
 
     queue.submit("ingest", project.id, body, settings, job_id=db_job.id, payload={"projectId": project.id, "url": payload.url})
     return {"jobId": db_job.id, "projectId": project.id, "status": "queued"}

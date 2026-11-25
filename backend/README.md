@@ -158,8 +158,33 @@ equivalent. Unknown variables are ignored.
 | `CLIP_MIN_DURATION` / `CLIP_MAX_DURATION` / `CLIP_TARGET_DURATION` | `5` / `90` / `38` | Seconds. |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | unset | Optional. Without either, ranking is heuristic-only. |
 | `LLM_TIMEOUT_SEC` | `45` | |
+| `JOB_QUEUE` | `inline` | `inline` needs no extra services; `celery` needs Redis. |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Broker/result backend for Celery workers. |
+| `ENABLE_CREDIT_GATE` | `false` | Opt-in quota enforcement for browser device IDs. |
+| `FREE_MONTHLY_MINUTES` / `CREATOR_MONTHLY_MINUTES` / `PRO_MONTHLY_MINUTES` | `30` / `300` / `1200` | Freemium plans. |
+| `REFERRAL_BONUS_MINUTES` | `15` | Added to both accounts on a successful invite. |
+| `ENABLE_SFX_HOOKS` | `true` | Synthesized pops/whooshes; exports can opt out. |
 | `FFMPEG_BINARY` / `FFPROBE_BINARY` | `ffmpeg` / `ffprobe` | Point at real binaries, not shims. |
 | `FFMPEG_TIMEOUT_SEC` | `1800` | |
+
+### Distributed queue (optional)
+
+The inline thread pool is the default. To run heavy jobs in separate workers:
+
+```bash
+pip install "celery>=5.4,<6" "redis>=5,<7"
+# backend/.env:
+JOB_QUEUE=celery
+REDIS_URL=redis://127.0.0.1:6379/0
+
+celery -A app.celery_tasks worker --loglevel=info --concurrency=2
+```
+
+`app.celery_tasks` registers `clipforge.process_project`,
+`clipforge.generate_project`, `clipforge.run_export` and
+`clipforge.ingest_youtube` — the same task names the API's queue adapter sends.
+Cancellation works across processes through the persisted `jobs.cancel_requested`
+flag; progress and terminal states are written to SQLite by the pipeline itself.
 
 ## API
 

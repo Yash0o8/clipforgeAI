@@ -42,15 +42,16 @@ export function LandingPage() {
       {/* Hero */}
       <section className="mx-auto flex max-w-6xl flex-col items-center gap-8 px-4 pb-14 pt-10 text-center sm:px-6 sm:pt-14 lg:px-8">
         <Badge tone="brand" size="sm" dot>
-          Self-hosted, runs locally
+          Built for Indian gaming streamers &amp; Hindi podcasters
         </Badge>
         <div className="space-y-4">
           <h1 className="text-3xl font-semibold tracking-tight text-primary sm:text-4xl lg:text-5xl">
             Turn long videos into platform-ready clips with one flow.
           </h1>
           <p className="mx-auto max-w-2xl text-lg text-secondary sm:text-xl">
-            Upload once. Let ClipForge find hooks, trim them, caption them and export to the exact
-            aspect ratio for each platform.
+            Paste a YouTube link or upload a stream. ClipForge finds the hook, cuts the dead air,
+            adds Hinglish captions and stacks your story over a licensed gameplay loop — ready for
+            Shorts, Reels and TikTok.
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-3">
@@ -127,7 +128,8 @@ export function LandingPage() {
             <PanelHeader title="2. Process" />
             <PanelBody>
               <p className="text-[13px] leading-relaxed text-secondary">
-                Transcribe, score and detect highlights. Progress is reported stage by stage as it runs.
+                Transcribe, score and detect highlights from speech, audio spikes and visual cuts.
+                Progress is reported stage by stage as it runs.
               </p>
             </PanelBody>
           </Panel>

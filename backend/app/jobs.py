@@ -281,6 +281,51 @@ class CeleryQueueAdapter:
             raise
         return record
 
+    def _refresh_records(self) -> None:
+        """Mirror persisted job state into the web process's in-memory records.
+
+        Unlike the inline queue, a Celery worker runs in another process, so the
+        record created by ``submit`` would otherwise stay ``queued`` forever and
+        every later request would think a finished job was still active. The
+        pipeline already writes progress/terminal state to SQLite; read it back
+        before any status query.
+        """
+        if not self._records:
+            return
+        try:
+            from .db import ExportJob, Job, new_session
+
+            session = new_session()
+            try:
+                ids = list(self._records)
+                jobs = {
+                    row.id: row
+                    for row in session.query(Job).filter(Job.id.in_(ids)).all()
+                }
+                exports = {
+                    row.id: row
+                    for row in session.query(ExportJob).filter(ExportJob.id.in_(ids)).all()
+                }
+            finally:
+                session.close()
+        except Exception:  # pragma: no cover - DB not ready during startup
+            return
+
+        for record in self._records.values():
+            row = exports.get(record.id) if record.kind == "export" else jobs.get(record.id)
+            if row is None:
+                continue
+            status = row.status
+            if status in ("rendering", "running"):
+                record.status = "running"
+            elif status in ("queued", "complete", "failed", "cancelled"):
+                record.status = status
+            record.progress = float(getattr(row, "progress", 0.0) or 0.0)
+            record.stage = getattr(row, "stage", None)
+            record.error = getattr(row, "error", None)
+            if status == "cancelled":
+                record._cancel.set()
+
     def cancel(self, job_id: str) -> bool:
         with self._lock:
             record = self._records.get(job_id)
@@ -290,6 +335,7 @@ class CeleryQueueAdapter:
         return True
 
     def cancel_for_project(self, project_id: str, kind: str | None = None) -> int:
+        self._refresh_records()
         with self._lock:
             records = list(self._records.values())
         n = 0
@@ -300,16 +346,19 @@ class CeleryQueueAdapter:
         return n
 
     def get(self, job_id: str) -> JobRecord | None:
+        self._refresh_records()
         with self._lock:
             return self._records.get(job_id)
 
     def active_for_project(self, project_id: str, kind: str | None = None) -> JobRecord | None:
+        self._refresh_records()
         with self._lock:
             records = [r for r in self._records.values() if r.project_id == project_id]
         running = [r for r in records if r.status in ("queued", "running") and (not kind or r.kind == kind)]
         return max(running, key=lambda r: r.created) if running else None
 
     def snapshot(self) -> list[dict[str, Any]]:
+        self._refresh_records()
         with self._lock:
             records = list(self._records.values())
         return [{"id": r.id, "projectId": r.project_id, "kind": r.kind, "status": r.status, "stage": r.stage, "progress": r.progress, "error": r.error, "cancelRequested": r._cancel.is_set()} for r in records]

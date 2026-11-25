@@ -244,7 +244,7 @@ export function ExportSettings({
             checked={Boolean(settings.sfxEnabled)}
             onChange={(value) => onChange({ sfxEnabled: value })}
             label="SFX hooks"
-            description="Mix subtle marker-based SFX when enabled on server (best-effort)."
+            description="Subtle pops on keywords/impacts and whooshes on fast cuts."
           />
           <Toggle
             id="facecam-pip"

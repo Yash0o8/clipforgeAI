@@ -151,7 +151,7 @@ export const DEFAULT_EXPORT_SETTINGS = {
   watermark: false,
   autoZoom: false,
   deadAirRemoval: false,
-  sfxEnabled: false,
+  sfxEnabled: true,
   facecamEnabled: false,
   facecamAssetId: null,
   facecamBox: { x: 0.72, y: 0.04, w: 0.24, h: 0.24 },

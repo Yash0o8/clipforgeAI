@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     enable_audio_spike_detection: bool = True
     enable_scene_cut_detection: bool = True
     enable_dead_air_removal: bool = True
-    enable_sfx_hooks: bool = False
+    enable_sfx_hooks: bool = True  # subtle synthesized pops/whooshes; users can opt out
     face_tracking_sample_fps: float = 2.0
     auto_zoom_min: float = 1.0
     auto_zoom_max: float = 1.12

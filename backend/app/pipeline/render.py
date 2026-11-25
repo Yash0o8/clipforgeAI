@@ -452,35 +452,57 @@ def _audio_present(source: Path) -> bool:
 
 
 def _build_sfx_audio_filter(request: RenderRequest, keeps: list[tuple[float, float]]) -> str:
-    """Best-effort SFX mix using synthesized tones (no external assets required)."""
+    """Mix synthesized whooshes/pops; no third-party SFX assets required.
+
+    ``impact`` is a low thump, ``whoosh`` is a filtered noise sweep and ``pop``
+    is a short high tone. All are delayed to their marker time and mixed at a
+    low level by the caller's ``amix`` weights.
+    """
     if not request.sfx_enabled or not request.sfx_markers or not keeps:
         return ""
-    markers = []
-    for m in request.sfx_markers[:12]:
-        if not isinstance(m, dict):
+    markers: list[tuple[float, str]] = []
+    for marker in request.sfx_markers[:16]:
+        if not isinstance(marker, dict):
             continue
         try:
-            t = float(m.get("t", 0.0)) - request.start_sec
-        except Exception:
+            t = float(marker.get("t", 0.0)) - request.start_sec
+        except (TypeError, ValueError):
             continue
         t = _remap_time_for_keep(t, keeps) if len(keeps) > 1 else t
         if t is None or t < 0:
             continue
-        markers.append(t)
+        kind = str(marker.get("type") or "impact").strip().lower()
+        if kind not in {"impact", "whoosh", "pop"}:
+            kind = "impact"
+        markers.append((t, kind))
     if not markers:
         return ""
+
     out_dur = sum(e - s for s, e in keeps)
-    parts = []
-    labels = []
-    for i, t in enumerate(sorted(set(round(x, 2) for x in markers))):
+    unique: list[tuple[float, str]] = []
+    for t, kind in sorted(markers):
+        if any(abs(t - kept_t) < 0.18 for kept_t, _ in unique):
+            continue
+        unique.append((t, kind))
+        if len(unique) >= 12:
+            break
+
+    parts: list[str] = []
+    labels: list[str] = []
+    for i, (t, kind) in enumerate(unique):
         delay_ms = max(0, int(t * 1000))
         lbl = f"[sfx{i}]"
         labels.append(lbl)
-        # short "pop" tone; low volume mixed later
-        parts.append(
-            f"sine=frequency={880 if i % 2 == 0 else 660}:sample_rate=48000:duration=0.08,"
-            f"afade=t=in:st=0:d=0.01,afade=t=out:st=0.05:d=0.03,adelay={delay_ms}|{delay_ms}{lbl}"
-        )
+        if kind == "whoosh":
+            source = "anoisesrc=color=pink:r=48000:d=0.16"
+            envelope = "highpass=f=320,lowpass=f=3200,afade=t=in:st=0:d=0.02,afade=t=out:st=0.09:d=0.07"
+        else:
+            # Pop is brighter than an impact thump.
+            frequency = 880 if kind == "pop" else 240
+            source = f"sine=frequency={frequency}:sample_rate=48000:duration=0.08"
+            envelope = "afade=t=in:st=0:d=0.01,afade=t=out:st=0.05:d=0.03"
+        parts.append(f"{source},{envelope},adelay={delay_ms}|{delay_ms}{lbl}")
+
     if not parts:
         return ""
     mix = "".join(labels) + f"amix=inputs={len(labels)}:duration=longest,atrim=0:{out_dur:.3f},asetpts=PTS-STARTPTS[sfx]"
