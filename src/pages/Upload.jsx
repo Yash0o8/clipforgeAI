@@ -10,6 +10,7 @@ import { VideoMetadata } from '../components/upload/VideoMetadata.jsx';
 import { useVideoUpload } from '../hooks/useVideoUpload.js';
 import { useApp } from '../hooks/useApp.js';
 import * as projectService from '../services/projectService.js';
+import { getDeviceId } from '../services/billingService.js';
 import { CREATION_PRESETS, NOTIFICATION_TONE } from '../utils/constants.js';
 
 export function UploadPage() {
@@ -22,6 +23,7 @@ export function UploadPage() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [presetId, setPresetId] = useState('podcast');
   const [transcriptionHint, setTranscriptionHint] = useState('auto');
+  const [transcriptionQuality, setTranscriptionQuality] = useState('auto');
   const [ingestStatus, setIngestStatus] = useState('');
 
   const selectedPreset = CREATION_PRESETS.find((p) => p.id === presetId) ?? CREATION_PRESETS[0];
@@ -44,6 +46,7 @@ export function UploadPage() {
             renderMode: selectedPreset.renderMode,
             captionPreset: selectedPreset.captionPreset,
             transcriptionHint: transcriptionHint === 'auto' ? undefined : transcriptionHint,
+            transcriptionQuality,
           },
         });
         project = await projectService.getProject(ingest.projectId);
@@ -59,7 +62,7 @@ export function UploadPage() {
         }
         if (!project?.hasLocalSource && !project?.objectUrl) throw new Error('YouTube ingest did not produce a media file.');
         setIngestStatus('Media ready. Starting AI processing...');
-        await projectService.processProject(project.id);
+        await projectService.processProject(project.id, { deviceId: getDeviceId() });
       } else {
         if (!upload.file) return;
         let uploadId = upload.uploadId;
@@ -84,10 +87,11 @@ export function UploadPage() {
             renderMode: selectedPreset.renderMode,
             captionPreset: selectedPreset.captionPreset,
             transcriptionHint: transcriptionHint === 'auto' ? undefined : transcriptionHint,
+            transcriptionQuality,
           },
         });
         project = { ...project, objectUrl: upload.objectUrl ?? project.objectUrl };
-        await projectService.processProject(project.id);
+        await projectService.processProject(project.id, { deviceId: getDeviceId() });
       }
 
       addProject(project);
@@ -177,11 +181,23 @@ export function UploadPage() {
                   <option value="hinglish_roman">Hindi + Roman Hinglish</option>
                 </select>
               </label>
-              <div className="rounded-lg border border-line bg-ink-900/40 px-3 py-2 text-xs text-secondary">
-                <p className="font-medium text-primary">Preset behavior</p>
-                <p className="mt-1">{selectedPreset.description}</p>
-              </div>
+              <label className="text-sm text-secondary">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-faint">Speed / accuracy</span>
+                <select
+                  className="w-full rounded-lg border border-line bg-ink-900 px-3 py-2 text-sm text-primary"
+                  value={transcriptionQuality}
+                  onChange={(e) => setTranscriptionQuality(e.target.value)}
+                >
+                  <option value="auto">Auto — fast for long videos</option>
+                  <option value="fast">Fast — quickest, slightly less accurate</option>
+                  <option value="accuracy">Accuracy — slowest, best detail</option>
+                </select>
+              </label>
             </div>
+            <p className="text-[11px] leading-relaxed text-faint">
+              Videos over 60 minutes switch to the fast preset automatically. Long jobs show live
+              transcription progress; you can leave this page and come back.
+            </p>
 
             {ingestStatus ? (
               <div className="rounded-control border border-brand-500/30 bg-brand-500/10 px-3 py-2 text-sm text-brand-200">

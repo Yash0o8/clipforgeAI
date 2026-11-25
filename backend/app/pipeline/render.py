@@ -193,20 +193,40 @@ def _zoom_expr_for_timeline(timeline: list[tuple[float, float, float]], default_
     return expr
 
 
-def _keep_intervals(request: RenderRequest) -> list[tuple[float, float]]:
-    """Clip-relative keep intervals after dead-air removal."""
-    start = 0.0
-    end = request.duration
-    if not request.dead_air_removal or not request.dead_air_intervals:
+def _keep_intervals(
+    request_or_duration: RenderRequest | float,
+    dead_air_intervals: list[dict[str, Any]] | None = None,
+    *,
+    source_start_sec: float = 0.0,
+) -> list[tuple[float, float]]:
+    """Clip-relative keep intervals after dead-air removal.
+
+    Accepts either a RenderRequest (normal render path) or (duration, intervals)
+    for caption-only remapping on an already-rendered clip timeline.
+    """
+    if isinstance(request_or_duration, RenderRequest):
+        request = request_or_duration
+        start = 0.0
+        end = request.duration
+        intervals = request.dead_air_intervals
+        offset = request.start_sec
+        enabled = request.dead_air_removal
+    else:
+        start = 0.0
+        end = max(0.0, float(request_or_duration))
+        intervals = dead_air_intervals or []
+        offset = float(source_start_sec)
+        enabled = True
+    if not enabled or not intervals:
         return [(start, end)]
 
     cuts: list[tuple[float, float]] = []
-    for it in request.dead_air_intervals:
+    for it in intervals:
         if not isinstance(it, dict):
             continue
         try:
-            s = float(it.get("startSec", it.get("start", 0.0))) - request.start_sec
-            e = float(it.get("endSec", it.get("end", 0.0))) - request.start_sec
+            s = float(it.get("startSec", it.get("start", 0.0))) - offset
+            e = float(it.get("endSec", it.get("end", 0.0))) - offset
         except Exception:
             continue
         s = _clamp(s, start, end)
@@ -231,9 +251,8 @@ def _keep_intervals(request: RenderRequest) -> list[tuple[float, float]]:
         keeps.append((cur, end))
     if not keeps:
         return [(start, end)]
-    # Avoid over-aggressive trimming; keep original if too much removed.
     kept = sum(e - s for s, e in keeps)
-    if kept < request.duration * 0.45:
+    if kept < end * 0.45:
         return [(start, end)]
     return keeps
 

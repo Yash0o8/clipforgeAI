@@ -98,6 +98,20 @@ class Project(Base):
         # 404 and sit on a broken player with no explanation.
         has_media = bool(self.asset_path)
         settings = json.loads(self.settings_json or "{}")
+        # Internal progress bookkeeping rides in settings_json so existing
+        # databases need no migration. It is surfaced as its own field and never
+        # leaks back into the user-facing settings object.
+        processing = settings.pop("_processing", None) or {}
+        transcription = {
+            "status": processing.get("status"),
+            "progress": float(processing.get("transcriptProgress") or 0.0),
+            "processedSec": float(processing.get("processedSec") or 0.0),
+            "wordCount": int(processing.get("wordCount") or 0),
+            "provider": processing.get("provider") or "local",
+            "model": processing.get("model"),
+            "fastMode": bool(processing.get("fastMode")),
+            "quality": processing.get("quality") or "auto",
+        }
         return {
             "id": self.id,
             "title": self.title,
@@ -115,6 +129,8 @@ class Project(Base):
             "stages": json.loads(self.stages_json or "[]"),
             "error": self.error,
             "wordCount": self.word_count or 0,
+            "processingStartedAt": processing.get("startedAt"),
+            "transcription": transcription,
             "createdAt": iso(self.created_at),
             "updatedAt": iso(self.updated_at),
             # Path the <video> element loads directly. The media route sits
@@ -292,6 +308,48 @@ class Job(Base):
             "progress": self.progress or 0.0,
             "error": self.error,
             "cancelRequested": self.cancel_requested,
+            "createdAt": iso(self.created_at),
+            "updatedAt": iso(self.updated_at),
+        }
+
+
+class CreditAccount(Base):
+    """Freemium entitlement + usage ledger.
+
+    Keyed by a client-generated device id so the zero-friction flow works with
+    no signup: the browser keeps one random id in localStorage and the API
+    attributes usage to it. When real auth lands, the same row can be keyed by
+    a user id without changing the routes.
+    """
+
+    __tablename__ = "credit_accounts"
+
+    id = Column(String, primary_key=True)
+    account_type = Column(String, nullable=False, default="device")
+    plan = Column(String, nullable=False, default="free")
+    bonus_minutes = Column(Integer, default=0)
+    used_sec = Column(Float, default=0.0)
+    period_start = Column(DateTime, default=utcnow)
+    referral_code = Column(String, unique=True, index=True)
+    referred_by = Column(String)
+    stripe_customer_id = Column(String)
+    stripe_subscription_id = Column(String)
+
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    def to_dict(self, *, allowance_minutes: float = 0.0, used_minutes: float = 0.0) -> dict:
+        remaining = max(0.0, allowance_minutes - used_minutes)
+        return {
+            "id": self.id,
+            "plan": self.plan,
+            "allowanceMinutes": round(allowance_minutes, 1),
+            "bonusMinutes": int(self.bonus_minutes or 0),
+            "usedMinutes": round(used_minutes, 1),
+            "remainingMinutes": round(remaining, 1),
+            "referralCode": self.referral_code,
+            "referredBy": self.referred_by,
+            "periodStart": iso(self.period_start),
             "createdAt": iso(self.created_at),
             "updatedAt": iso(self.updated_at),
         }

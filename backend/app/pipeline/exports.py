@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from ..config import Settings, get_settings
 from ..db import Clip, ExportJob, Project, utcnow
@@ -203,10 +204,35 @@ def run_export(
             if prior_path and prior_path.exists():
                 # Caption-only rerender: reuse prior rendered video as source; no reanalysis.
                 source = prior_path
-                # Rebase source-absolute transcript to clip-relative for the trimmed render.
+                prior_settings = json.loads(prior_complete.settings_json or "{}")
+                clip_dur = max(0.1, clip.end_sec - clip.start_sec)
+                clip_meta = json.loads(clip.meta_json or "{}")
+                project_settings = json.loads(project.settings_json or "{}")
+
+                # If prior render baked dead-air removal, captions must be remapped to the baked timeline.
+                prior_dead_air = bool(prior_settings.get("deadAirRemoval"))
+                dead_air_intervals = (
+                    clip_meta.get("deadAirIntervals")
+                    if isinstance(clip_meta.get("deadAirIntervals"), list)
+                    else project_settings.get("deadAirIntervals", [])
+                )
+                keeps = [(0.0, clip_dur)]
+                if prior_dead_air and isinstance(dead_air_intervals, list) and dead_air_intervals:
+                    from .render import _keep_intervals
+
+                    keeps = _keep_intervals(clip_dur, dead_air_intervals)
+
+                def _remap_to_prior(t: float) -> float | None:
+                    # Map clip-relative source time to prior rendered timeline.
+                    if len(keeps) <= 1:
+                        return max(0.0, min(clip_dur, t))
+                    from .render import _remap_time_for_keep
+
+                    return _remap_time_for_keep(t, keeps)
+
                 raw_transcript = json.loads(clip.transcript_json or "[]")
                 rebased_transcript = []
-                clip_dur = max(0.1, clip.end_sec - clip.start_sec)
+                rendered_dur = sum(max(0.0, e - s) for s, e in keeps) if keeps else clip_dur
                 for seg in raw_transcript if isinstance(raw_transcript, list) else []:
                     if not isinstance(seg, dict):
                         continue
@@ -217,9 +243,22 @@ def run_export(
                         continue
                     if ee < -0.1 or ss > clip_dur + 0.1:
                         continue
+                    ss = max(0.0, min(clip_dur, ss))
+                    ee = max(0.0, min(clip_dur, ee))
+                    rss = _remap_to_prior(ss)
+                    ree = _remap_to_prior(ee)
+                    if rss is None or ree is None:
+                        # fallback to midpoint remap for segments crossing cut boundaries
+                        mid = _remap_to_prior((ss + ee) / 2)
+                        if mid is None:
+                            continue
+                        rss = max(0.0, mid - ((ee - ss) / 2))
+                        ree = min(rendered_dur, rss + (ee - ss))
+                    if ree - rss < 0.05:
+                        continue
                     seg2 = dict(seg)
-                    seg2["startSec"] = max(0.0, ss)
-                    seg2["endSec"] = max(0.0, min(clip_dur, ee))
+                    seg2["startSec"] = max(0.0, rss)
+                    seg2["endSec"] = max(0.0, min(rendered_dur, ree))
                     words = []
                     for w in seg.get("words") or []:
                         if not isinstance(w, dict):
@@ -231,18 +270,49 @@ def run_export(
                             continue
                         if we < -0.1 or ws > clip_dur + 0.1:
                             continue
+                        ws = max(0.0, min(clip_dur, ws))
+                        we = max(0.0, min(clip_dur, we))
+                        rws = _remap_to_prior(ws)
+                        rwe = _remap_to_prior(we)
+                        if rws is None or rwe is None:
+                            continue
+                        if rwe - rws < 0.02:
+                            continue
                         w2 = dict(w)
-                        w2["startSec"] = max(0.0, ws)
-                        w2["endSec"] = max(0.0, min(clip_dur, we))
+                        w2["startSec"] = max(0.0, rws)
+                        w2["endSec"] = max(0.0, min(rendered_dur, rwe))
                         words.append(w2)
                     seg2["words"] = words
                     rebased_transcript.append(seg2)
+
+                # Remap explicit caption segments if provided, relative to original clip timeline.
+                caption_segments = options.get("captionSegments")
+                remapped_caption_segments = None
+                if isinstance(caption_segments, list):
+                    remapped_caption_segments = []
+                    for cs in caption_segments:
+                        if not isinstance(cs, dict):
+                            continue
+                        try:
+                            css = float(cs.get("startSec", 0.0))
+                            cee = float(cs.get("endSec", 0.0))
+                        except Exception:
+                            continue
+                        # captionSegments from editor are clip-relative (0..clip_dur)
+                        rss = _remap_to_prior(max(0.0, min(clip_dur, css)))
+                        ree = _remap_to_prior(max(0.0, min(clip_dur, cee)))
+                        if rss is None or ree is None or ree - rss < 0.05:
+                            continue
+                        c2 = dict(cs)
+                        c2["startSec"] = round(rss, 3)
+                        c2["endSec"] = round(ree, 3)
+                        remapped_caption_segments.append(c2)
 
                 request = RenderRequest(
                     source=source,
                     output=output,
                     start_sec=0.0,
-                    end_sec=clip_dur,
+                    end_sec=rendered_dur,
                     aspect_ratio=job.aspect_ratio,
                     resolution=job.resolution,
                     fmt=job.format,
@@ -250,19 +320,20 @@ def run_export(
                     caption_preset_id=options.get("captionPresetId"),
                     caption_position=options.get("captionPosition"),
                     caption_text=options.get("captionText"),
-                    caption_segments=options.get("captionSegments"),
+                    caption_segments=remapped_caption_segments if remapped_caption_segments is not None else options.get("captionSegments"),
                     transcript=rebased_transcript,
                     render_mode="default",
                     background_source=None,
-                    watermark_text=(get_settings().free_watermark_text if options.get("watermark") else None),
-                    hook_banner=str(options.get("hookBanner") or "").strip() or None,
+                    # Avoid double-overlaying watermark/hook banner on top of an already-rendered video.
+                    watermark_text=None if prior_settings.get("watermark") else (get_settings().free_watermark_text if options.get("watermark") else None),
+                    hook_banner=None if prior_settings.get("hookBanner") else (str(options.get("hookBanner") or "").strip() or None),
                     preview=bool(options.get("preview")),
                     keyword_highlight=bool(options.get("keywordHighlight")),
                     highlight_color=options.get("highlightColor"),
-                    keywords=(json.loads(clip.meta_json or "{}").get("keywords") or []),
+                    keywords=(clip_meta.get("keywords") or []),
                     auto_zoom=False,
                     dead_air_removal=False,
-                    sfx_enabled=False,
+                    sfx_enabled=False,  # baked in prior render audio
                     facecam_enabled=False,
                     facecam_source=None,
                     facecam_box=None,
@@ -363,7 +434,24 @@ def run_export(
     job.download_token = None
     job.download_expires_at = None
 
-    session.commit()
+    try:
+        session.commit()
+    except StaleDataError as exc:
+        # A clip can be deleted while a slow render is in flight (common in the
+        # test suite, and possible in the UI if a user removes a project). The
+        # worker's session then holds stale ORM rows. Record a terminal failure
+        # instead of letting a naked DB exception leave the job "rendering".
+        session.rollback()
+        message = "The clip was deleted while it was rendering."
+        fresh = session.query(ExportJob).filter(ExportJob.id == job.id).first()
+        if fresh is not None:
+            fresh.status = "failed"
+            fresh.error = message
+            fresh.progress = 100.0
+            fresh.updated_at = utcnow()
+            session.commit()
+        output.unlink(missing_ok=True)
+        raise ExportError(message) from exc
 
     return {
         "jobId": job.id,

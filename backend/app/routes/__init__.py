@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from .billing import router as billing_router
 from .clips import router as clips_router
 from .exports import router as exports_router
 from .projects import router as projects_router
@@ -23,5 +24,6 @@ api_router.include_router(projects_router)
 api_router.include_router(clips_router)
 api_router.include_router(exports_router)
 api_router.include_router(vault_router)
+api_router.include_router(billing_router)
 
 __all__ = ["api_router"]

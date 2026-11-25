@@ -1,12 +1,42 @@
-import { Link } from 'react-router-dom';
-import { ArrowRight, Sparkles } from 'lucide-react';
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRight, Link2, Sparkles } from 'lucide-react';
 import { Button } from '../components/common/Button.jsx';
 import { Badge } from '../components/common/Badge.jsx';
 import { Panel, PanelBody, PanelHeader } from '../components/common/Panel.jsx';
+import { TextField } from '../components/common/TextField.jsx';
+import { useToast } from '../hooks/useToast.js';
+import { startYoutubeDemo } from '../services/demoService.js';
 import { SUPPORTED_PLATFORMS } from '../utils/constants.js';
 
-/** Landing page for unauthenticated visitors. */
+/**
+ * Landing page. A visitor can paste a YouTube URL right here and get a free
+ * demo clip before ever being asked to sign up — value first, account later.
+ */
 export function LandingPage() {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const onTryDemo = async (event) => {
+    event.preventDefault();
+    const url = youtubeUrl.trim();
+    if (!url || busy) return;
+    setBusy(true);
+    setStatus('Starting your free demo…');
+    try {
+      const project = await startYoutubeDemo(url, { onStatus: setStatus });
+      navigate(`/app/projects/${project.id}/processing`);
+    } catch (cause) {
+      setStatus('');
+      toast.error('Demo could not start', { body: cause.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="relative">
       {/* Hero */}
@@ -32,6 +62,28 @@ export function LandingPage() {
             Go to dashboard
           </Button>
         </div>
+
+        <form
+          onSubmit={onTryDemo}
+          className="flex w-full max-w-xl flex-col gap-2 rounded-panel border border-line bg-ink-900/60 p-3 text-left sm:flex-row sm:items-end"
+        >
+          <div className="min-w-0 flex-1">
+            <TextField
+              label="Try a free demo — paste a YouTube link"
+              value={youtubeUrl}
+              onChange={(event) => setYoutubeUrl(event.target.value)}
+              placeholder="https://www.youtube.com/watch?v=..."
+              type="url"
+            />
+          </div>
+          <Button type="submit" size="md" loading={busy} disabled={!youtubeUrl.trim()}>
+            <Link2 aria-hidden className="size-4" />
+            Generate a free clip
+          </Button>
+        </form>
+        <p className="text-[11.5px] text-faint" aria-live="polite">
+          {status || 'No signup. 30 processing minutes a month with a small watermark.'}
+        </p>
       </section>
 
       {/* Supported platforms */}

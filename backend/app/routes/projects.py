@@ -18,7 +18,7 @@ from ..config import get_settings
 from ..db import Clip, ExportJob, Job, Project, get_session, new_session, utcnow
 from ..jobs import JobContext, get_queue
 from ..pipeline.runner import PipelineError, recover_interrupted, run_processing
-from ..schemas import ProjectCreate, ProjectPatch
+from ..schemas import ProcessRequest, ProjectCreate, ProjectPatch
 from ..storage import probe
 from ..utils import new_id, stable_hash
 from .upload_store import get_session as get_upload_session
@@ -214,7 +214,11 @@ def list_clips(project_id: str, session: Session = Depends(get_session)) -> list
 
 
 @router.post("/{project_id}/process", status_code=status.HTTP_202_ACCEPTED)
-def process_project(project_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+def process_project(
+    project_id: str,
+    payload: ProcessRequest | None = None,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
     """Queue the transcription + highlight pipeline.
 
     Returns a job descriptor. The client polls ``GET /projects/{id}`` for
@@ -227,6 +231,16 @@ def process_project(project_id: str, session: Session = Depends(get_session)) ->
 
     queue = get_queue()
     settings = get_settings()
+
+    # Freemium gate is opt-in and only applies when the client supplies its
+    # device id. Existing clients keep unlimited processing.
+    if payload is not None and payload.deviceId and settings.enable_credit_gate:
+        from ..billing import get_or_create_account, reserve_minutes
+
+        account = get_or_create_account(session, payload.deviceId, settings)
+        allowed, reason = reserve_minutes(session, account, project.duration_sec, settings)
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=reason)
 
     existing = queue.active_for_project(project_id, kind="process")
     if existing is not None:
@@ -419,7 +433,21 @@ def _run_process(
             target_count=target_count,
         )
     except PipelineError as exc:
-        # Already recorded on the project; the queue records it on the job.
+        # Terminal handling lives at the boundary as well as in the runner: an
+        # adapter, a future worker backend, or a partially committed run must
+        # never leave the project row stuck at "processing".
+        db_session.rollback()
+        project = db_session.query(Project).filter(Project.id == context.project_id).first()
+        if project is not None:
+            project.status = "failed"
+            project.error = str(exc)
+            project.updated_at = utcnow()
+        db_job = db_session.query(Job).filter(Job.id == job_id).first()
+        if db_job is not None:
+            db_job.status = "failed"
+            db_job.error = str(exc)
+            db_job.updated_at = utcnow()
+        db_session.commit()
         logger.info("pipeline %s reported: %s", job_id, exc)
         raise
     finally:

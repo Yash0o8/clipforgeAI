@@ -149,6 +149,19 @@ _HEX = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 # and silently deleted.
 _ASS_OVERRIDE = re.compile(r"\{\\[^}]*\}")
 _HTML_TAG = re.compile(r"</?[a-zA-Z][^>]*>")
+_EMOJI_SAFE = {
+    "🔥": "[FIRE]",
+    "💯": "100",
+    "😂": "LOL",
+    "🚀": "[GO]",
+    "🎯": "[TARGET]",
+    "⚡": "[FAST]",
+    "💰": "[MONEY]",
+    "✅": "[OK]",
+    "❌": "[X]",
+    "❤️": "<3",
+    "😍": "<3",
+}
 
 
 def parse_color(value: str) -> tuple[int, int, int]:
@@ -325,6 +338,13 @@ def build_style(
     )
 
 
+def _safe_emoji_text(text: str) -> str:
+    out = text or ""
+    for k, v in _EMOJI_SAFE.items():
+        out = out.replace(k, v)
+    return out
+
+
 def strip_ass_formatting(text: str) -> str:
     """Remove ASS override blocks and stray HTML tags from caption text.
 
@@ -332,7 +352,7 @@ def strip_ass_formatting(text: str) -> str:
     brace-delimited span would eat legitimate caption text such as
     ``"the {best} way to edit"``.
     """
-    cleaned = _ASS_OVERRIDE.sub("", text or "")
+    cleaned = _ASS_OVERRIDE.sub("", _safe_emoji_text(text or ""))
     return _HTML_TAG.sub("", cleaned).strip()
 
 

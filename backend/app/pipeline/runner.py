@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -33,9 +34,15 @@ from ..utils import (
 )
 from .rank import rank_candidates
 from .render import render_clip
-from .score import Candidate, top_candidates
+from .score import Candidate, signal_only_candidates, top_candidates
 from .transcribe import TranscriptionError, transcribe
-from .analysis import detect_audio_spikes, detect_dead_air_intervals, detect_face_tracks, detect_scene_cuts
+from .analysis import (
+    detect_audio_spikes,
+    detect_dead_air_intervals,
+    detect_face_tracks,
+    detect_scene_cuts,
+    suggest_facecam_box,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +78,49 @@ def _apply_stage(
         job.progress = tracker.progress
         job.updated_at = utcnow()
 
+    session.commit()
+
+
+def _persist_progress(
+    session: Session,
+    project: Project,
+    job: Job | None,
+    tracker: StageTracker,
+    stage: str | None,
+    processing_meta: dict[str, Any] | None,
+) -> None:
+    """Persist a frequent progress tick to the row the UI actually polls.
+
+    ``_apply_stage`` handles stage boundaries. This handles the long middle of
+    transcription, where the old code only updated an in-memory job record and
+    left the project frozen at 32% for the entire 100-minute job.
+    """
+    # A final context.report(100) fires after the job has already been marked
+    # ready. Never rewrite a terminal row — doing so used to flip finished
+    # projects back to "processing" with the last stage still selected.
+    if project.status in ("ready", "failed", "cancelled"):
+        if job is not None:
+            job.stage = stage
+            job.progress = tracker.progress
+            job.updated_at = utcnow()
+            session.commit()
+        return
+
+    project.status = "processing"
+    project.current_stage = stage or tracker.current_stage()
+    project.progress = tracker.progress
+    project.stages_json = _stage_payload(tracker)
+    project.updated_at = utcnow()
+
+    if processing_meta is not None:
+        current = json.loads(project.settings_json or "{}")
+        current["_processing"] = processing_meta
+        project.settings_json = json.dumps(current)
+
+    if job is not None:
+        job.stage = project.current_stage
+        job.progress = tracker.progress
+        job.updated_at = utcnow()
     session.commit()
 
 
@@ -273,6 +323,42 @@ def run_processing(
         raise PipelineError("source media is missing. Re-upload the video.")
 
     tracker = StageTracker()
+
+    # The Processing page polls the project row, not the in-memory job record.
+    # Register a throttled listener so every meaningful transcript tick reaches
+    # that row without turning a 100-minute job into 100-minute DB write storm.
+    processing_meta: dict[str, Any] = {
+        "startedAt": utcnow().isoformat(),
+        "transcriptProgress": 0.0,
+        "processedSec": 0.0,
+        "wordCount": 0,
+        "provider": "local",
+        "model": settings.whisper_model,
+        "fastMode": False,
+    }
+    last_persist_value = [-1.0]
+    last_persist_time = [0.0]
+
+    def persist_progress(stage: str | None, progress: float, force: bool = False) -> None:
+        # The terminal report is emitted after finalization; applying it here
+        # would resurrect the "processing" state we just cleared above.
+        if stage is None or progress >= 100:
+            return
+        now = time.monotonic()
+        if (
+            not force
+            and abs(progress - last_persist_value[0]) < 1.0
+            and now - last_persist_time[0] < 1.5
+        ):
+            return
+        last_persist_value[0] = progress
+        last_persist_time[0] = now
+        try:
+            _persist_progress(session, project, job, tracker, stage, processing_meta)
+        except Exception:  # pragma: no cover - progress must never kill a job
+            logger.exception("could not persist progress for project %s", project_id)
+
+    context.on_update(persist_progress)
     context.report(STAGE_KEYS[0], 0.0)
 
     # --- Stage 1: upload ----------------------------------------------------
@@ -316,9 +402,38 @@ def run_processing(
         tracker.start("transcript")
         _apply_stage(session, project, job, tracker, "transcript")
 
-        # Map transcript completion onto 0..1 of the stage.
-        base = tracker.progress
+        run_settings = settings
+        project_settings = json.loads(project.settings_json or "{}")
+        transcription_hint = project_settings.get("transcriptionHint") or project_settings.get("transcription_hint")
+        if transcription_hint:
+            try:
+                run_settings = settings.model_copy(update={"transcription_hint": str(transcription_hint)})
+            except Exception:
+                run_settings = settings
 
+        quality = (
+            project_settings.get("transcriptionQuality")
+            or project_settings.get("transcription_quality")
+        )
+        plan = settings.transcription_plan(project.duration_sec, quality)
+        processing_meta.update(
+            {
+                "provider": plan["provider"],
+                "model": plan["model"],
+                "fastMode": plan["fastMode"],
+                "quality": plan["quality"],
+            }
+        )
+        logger.info(
+            "project %s transcription plan: model=%s beam=%s provider=%s fast=%s",
+            project_id,
+            plan["model"],
+            plan["beamSize"],
+            plan["provider"],
+            plan["fastMode"],
+        )
+
+        # Map transcript completion onto 0..1 of the stage.
         reported = [0.0]
 
         def on_transcribed(fraction: float) -> None:
@@ -330,41 +445,47 @@ def run_processing(
             if frac > 0.98:
                 frac = 0.98
             reported[0] = frac
+            processing_meta["transcriptProgress"] = round(frac * 100, 1)
+            processing_meta["processedSec"] = round(
+                frac * max(0.0, project.duration_sec or 0.0), 1
+            )
             tracker.advance("transcript", frac)
             context.report("transcript", tracker.progress)
 
-        # Initial heartbeat to show activity during model load
+        # Initial heartbeat to show activity during model load.
         try:
             on_transcribed(0.02)
         except Exception:
             pass
 
-        run_settings = settings
-        project_settings = json.loads(project.settings_json or "{}")
-        transcription_hint = project_settings.get("transcriptionHint") or project_settings.get("transcription_hint")
-        if transcription_hint:
-            try:
-                run_settings = settings.model_copy(update={"transcription_hint": str(transcription_hint)})
-            except Exception:
-                run_settings = settings
         segments, meta = transcribe(
             temp_audio,
             run_settings,
             on_progress=on_transcribed,
             cancel=context.should_cancel,
+            plan=plan,
         )
         context.check_cancelled()
 
         if not segments:
-            raise PipelineError(
-                "no speech was detected in this video. If it does contain speech, "
-                "try a version with less background noise."
-            )
+            # Silent gameplay/screen recordings are valid source material. Keep
+            # going and pick moments from audio spikes/scene cuts instead of
+            # failing the whole project at 32%.
+            logger.info("project %s has no speech; using signal-only highlights", project_id)
+            processing_meta["noSpeech"] = True
 
         project.word_count = meta["wordCount"]
+        processing_meta.update(
+            {
+                "transcriptProgress": 100.0,
+                "processedSec": round(float(project.duration_sec or 0.0), 1),
+                "wordCount": int(meta["wordCount"]),
+                "provider": meta.get("provider") or plan["provider"],
+            }
+        )
         tracker.advance("transcript", 1.0)
         _apply_stage(session, project, job, tracker, "transcript")
-        context.report("transcript", tracker.progress)
+        persist_progress("transcript", tracker.progress, force=True)
         logger.info(
             "project %s transcript: %d segments, %d words, lang=%s",
             project_id,
@@ -379,6 +500,10 @@ def run_processing(
         try:
             if preset in ("podcast", "gaming") and settings.enable_face_tracking:
                 analysis["faceTracks"] = detect_face_tracks(source, sample_fps=settings.face_tracking_sample_fps)
+                if preset == "gaming":
+                    facecam_box = suggest_facecam_box(analysis.get("faceTracks") or [])
+                    if facecam_box:
+                        analysis["facecamBoxSuggestion"] = facecam_box
             # Audio spikes are cheap and useful for all modes.
             if settings.enable_audio_spike_detection:
                 analysis["audioSpikes"] = detect_audio_spikes(source)
@@ -399,16 +524,29 @@ def run_processing(
         tracker.start("highlights")
         _apply_stage(session, project, job, tracker, "highlights")
 
+        signal_kwargs = {
+            "audio_spikes": project_settings.get("audioSpikes"),
+            "scene_cuts": project_settings.get("sceneCuts"),
+            "face_tracks": project_settings.get("faceTracks"),
+        }
         candidates = top_candidates(
             segments,
             settings,
             count=settings.shortlist_size,
             min_duration=min_duration,
             max_duration=max_duration,
-            audio_spikes=project_settings.get("audioSpikes"),
-            scene_cuts=project_settings.get("sceneCuts"),
-            face_tracks=project_settings.get("faceTracks"),
+            **signal_kwargs,
         )
+        if not candidates:
+            # No usable transcript windows: fall back to action/audio signals.
+            candidates = signal_only_candidates(
+                project.duration_sec or float(meta.get("duration") or 0.0),
+                settings,
+                count=settings.shortlist_size,
+                min_duration=min_duration,
+                max_duration=max_duration,
+                **signal_kwargs,
+            )
         context.check_cancelled()
 
         if not candidates:
@@ -419,7 +557,12 @@ def run_processing(
 
         # Only the shortlist goes to the LLM. Without a key this is a no-op that
         # returns the same list, so the heuristic result is what gets used.
-        ranked = rank_candidates(candidates, settings, max_clips=target_count or settings.default_clip_count)
+        # Silent clips have no text to judge, so skip the text-only ranker.
+        ranked = (
+            rank_candidates(candidates, settings, max_clips=target_count or settings.default_clip_count)
+            if segments
+            else candidates
+        )
         ranked = ranked[: (target_count or settings.default_clip_count)]
         context.check_cancelled()
 
@@ -440,13 +583,20 @@ def run_processing(
         )
         for payload in payloads:
             meta_json = json.loads(payload.get("meta_json") or "{}")
-            for k in ("faceTracks", "audioSpikes", "sceneCuts", "deadAirIntervals"):
+            for k in ("faceTracks", "audioSpikes", "sceneCuts", "deadAirIntervals", "facecamBoxSuggestion"):
                 if k in project_settings:
                     meta_json[k] = project_settings[k]
             # Best-effort SFX hooks from spikes/keywords for downstream editors.
             spikes = meta_json.get("audioSpikes") or []
             if isinstance(spikes, list) and spikes:
                 meta_json.setdefault("sfxMarkers", [{"t": s.get("t"), "type": "impact"} for s in spikes[:12] if isinstance(s, dict)])
+            if preset == "gaming":
+                export_json = json.loads(payload.get("export_json") or "{}")
+                suggested = meta_json.get("facecamBoxSuggestion")
+                if isinstance(suggested, dict) and not export_json.get("facecamBox"):
+                    export_json["facecamBox"] = suggested
+                    export_json["facecamEnabled"] = bool(export_json.get("facecamEnabled") or False)
+                    payload["export_json"] = json.dumps(export_json)
             payload["meta_json"] = json.dumps(meta_json)
         _persist_clips(session, project, payloads)
 
@@ -458,7 +608,22 @@ def run_processing(
             job.status = "cancelled"
         session.commit()
         raise
-    except PipelineError:
+    except PipelineError as exc:
+        # A handled pipeline failure (missing media, no highlight window, ...) is
+        # still a terminal state for the UI. Committing without setting it left
+        # the project "processing" forever while only the in-memory job knew it
+        # had failed.
+        session.rollback()
+        project = session.query(Project).filter(Project.id == project_id).first()
+        if project is not None:
+            project.status = "failed"
+            project.error = str(exc)
+            project.updated_at = utcnow()
+        job = session.query(Job).filter(Job.id == context.job_id).first()
+        if job is not None:
+            job.status = "failed"
+            job.error = str(exc)
+            job.updated_at = utcnow()
         session.commit()
         raise
     except Exception as exc:
@@ -477,6 +642,7 @@ def run_processing(
         temp_audio.unlink(missing_ok=True)
 
     tracker.finish()
+    processing_meta["status"] = "complete"
     project = session.query(Project).filter(Project.id == project_id).first()
     if project is not None:
         project.status = "ready"
@@ -485,6 +651,9 @@ def run_processing(
         project.stages_json = _stage_payload(tracker)
         project.error = None
         project.updated_at = utcnow()
+        current = json.loads(project.settings_json or "{}")
+        current["_processing"] = processing_meta
+        project.settings_json = json.dumps(current)
     if job is not None:
         job.status = "complete"
         job.progress = 100.0

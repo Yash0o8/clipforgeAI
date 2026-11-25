@@ -62,8 +62,8 @@ export async function deleteProject(projectId, { signal } = {}) {
  * Enqueue the transcription + highlight pipeline.
  * The response is a job descriptor the client polls via clipService.getJob.
  */
-export async function processProject(projectId, { signal } = {}) {
-  return post(`/projects/${projectId}/process`, {}, { signal });
+export async function processProject(projectId, { signal, deviceId } = {}) {
+  return post(`/projects/${projectId}/process`, deviceId ? { deviceId } : {}, { signal });
 }
 
 /** Cancel an in-flight job. */

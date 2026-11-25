@@ -1,20 +1,35 @@
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useRef } from 'react';
-import { Check, Loader, RotateCw, Sparkles, X } from 'lucide-react';
+import {
+  Activity,
+  Check,
+  Clock3,
+  Cpu,
+  Gauge,
+  Loader,
+  RotateCw,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { Panel, PanelHeader, PanelBody } from '../components/common/Panel.jsx';
 import { Button } from '../components/common/Button.jsx';
 import { ProgressBar } from '../components/common/ProgressBar.jsx';
 import { ErrorState } from '../components/common/EmptyState.jsx';
+import { Badge } from '../components/common/Badge.jsx';
 import { useProcessing } from '../hooks/useProcessing.js';
-import { formatClock } from '../utils/formatDuration.js';
+import {
+  formatClock,
+  formatDurationLong,
+  formatEta,
+} from '../utils/formatDuration.js';
 import { PROCESSING_STAGE_META, PROJECT_STATUS } from '../utils/constants.js';
 
 /**
- * Processing screen.
+ * Live processing screen.
  *
- * Runs the simulated pipeline, patches the project state, and ultimately lands
- * the user on the project detail where clips are shown. For real backends this
- * would poll `getProject` and `listClips` instead of simulating stages.
+ * Renders the server's real progress contract: overall percent, the five stage
+ * rows, and — while Whisper is working — a determinate transcription sub-bar
+ * with media seconds processed. Nothing here is a simulated animation.
  */
 export function ProcessingPage() {
   const { projectId } = useParams();
@@ -22,8 +37,26 @@ export function ProcessingPage() {
   const ranRef = useRef(false);
 
   const processing = useProcessing(projectId);
-  const { project, progress, stages, currentStage, error, status, isRunning, needsResume, canRetry, canCancel, start, retry, cancel } =
-    processing;
+  const {
+    project,
+    progress,
+    stages,
+    currentStage,
+    error,
+    status,
+    isRunning,
+    needsResume,
+    canRetry,
+    canCancel,
+    start,
+    retry,
+    cancel,
+    eta,
+    elapsedSec,
+    transcription,
+    sourceDurationSec,
+    lastUpdateAgeSec,
+  } = processing;
 
   // Auto-start once on mount so arriving from the upload flow just works.
   useEffect(() => {
@@ -54,9 +87,22 @@ export function ProcessingPage() {
   const stageMeta = PROCESSING_STAGE_META[currentStage?.key] ?? currentStage ?? null;
   const completed = status === PROJECT_STATUS.READY;
   const stopped = status === PROJECT_STATUS.FAILED || status === PROJECT_STATUS.CANCELLED;
+  const transcriptPercent = Math.round(transcription?.progress ?? 0);
+  const processedSec = transcription?.processedSec ?? 0;
+  const showTranscriptDetail =
+    !completed && !stopped && (transcription?.active || transcriptPercent > 0);
+  const provider = transcription?.provider || 'local';
+  const model = transcription?.model || project?.settings?.whisperModel || 'Whisper';
+  const fastMode = Boolean(transcription?.fastMode);
+  const stalled = isRunning && lastUpdateAgeSec != null && lastUpdateAgeSec > 25;
+
+  const etaLabel =
+    eta && Number.isFinite(eta.seconds)
+      ? `${formatDurationLong(eta.lowSec)} – ${formatDurationLong(eta.highSec)}`
+      : null;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
+    <div className="mx-auto max-w-3xl space-y-5">
       <Panel>
         <PanelHeader
           title={project.title}
@@ -67,8 +113,8 @@ export function ProcessingPage() {
             </Button>
           }
         />
-        <PanelBody className="space-y-5">
-          <div className="flex flex-col items-center gap-4 py-6 text-center sm:py-10">
+        <PanelBody className="space-y-6">
+          <div className="flex flex-col items-center gap-4 py-6 text-center sm:py-8">
             {completed ? (
               <span className="flex size-14 items-center justify-center rounded-full border border-success/30 bg-success/10 text-success">
                 <Check aria-hidden className="size-6" />
@@ -80,28 +126,105 @@ export function ProcessingPage() {
             )}
 
             <div className="space-y-2">
-              <h2 className="text-[17px] font-semibold text-primary">
-                {completed
-                  ? 'Clips ready'
-                  : stopped
-                    ? 'Processing stopped'
-                    : 'Generating highlight clips'}
-              </h2>
-              <p className="max-w-md text-sm leading-relaxed text-secondary">
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <h2 className="text-[17px] font-semibold text-primary">
+                  {completed
+                    ? 'Clips ready'
+                    : stopped
+                      ? 'Processing stopped'
+                      : 'Generating highlight clips'}
+                </h2>
+                {!completed && !stopped && (
+                  <Badge tone={fastMode ? 'warning' : 'outline'} size="xs">
+                    {fastMode ? 'Fast mode' : 'Accuracy mode'} · {provider}
+                  </Badge>
+                )}
+              </div>
+              <p className="max-w-xl text-sm leading-relaxed text-secondary">
                 {completed
                   ? 'We found the best moments. Take them to the editor to trim, caption and export.'
                   : stopped
                     ? error
                     : (stageMeta?.description ?? 'Working through the pipeline.')}
               </p>
+              {!completed && !stopped && model && (
+                <p className="text-[11.5px] text-faint">
+                  Transcribing with <span className="font-medium text-secondary">{model}</span>
+                  {fastMode ? ' (long-video speed preset)' : ''}. You can leave this page — the
+                  server keeps working.
+                </p>
+              )}
             </div>
 
-            <div className="w-full max-w-md space-y-2">
+            <div className="w-full max-w-lg space-y-3">
               <ProgressBar value={progress} />
               <div className="flex items-center justify-between text-[11.5px] text-faint">
-                <span className="tabular">{Math.round(progress)}%</span>
+                <span className="tabular">{Math.round(progress)}% overall</span>
                 <span className="capitalize">{completed ? 'done' : (currentStage?.key ?? 'idle')}</span>
               </div>
+
+              {showTranscriptDetail && (
+                <div className="rounded-lg border border-brand-500/25 bg-brand-500/[0.05] px-4 py-3 text-left">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="flex items-center gap-1.5 text-[12px] font-medium text-primary">
+                      <Activity aria-hidden className="size-3.5 text-brand-400" />
+                      Transcription
+                    </p>
+                    <span className="tabular text-[11.5px] text-faint">
+                      {formatDurationLong(processedSec)} / {formatDurationLong(sourceDurationSec)} processed
+                      {' · '}
+                      <span className="font-medium text-secondary">{transcriptPercent}%</span>
+                    </span>
+                  </div>
+                  <ProgressBar value={transcriptPercent} label="Transcript progress" showValue />
+                  {stalled && (
+                    <p className="mt-2 text-[11px] text-warning">
+                      No update for {lastUpdateAgeSec}s. The worker may still be loading the
+                      model or encoding a long segment — progress resumes automatically.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-line bg-ink-900/60 px-4 py-3">
+              <p className="flex items-center gap-1.5 text-[11.5px] uppercase tracking-wide text-faint">
+                <Clock3 aria-hidden className="size-3.5" /> Source length
+              </p>
+              <p className="tabular mt-1 text-[15px] font-medium text-primary">
+                {formatClock(sourceDurationSec)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-line bg-ink-900/60 px-4 py-3">
+              <p className="flex items-center gap-1.5 text-[11.5px] uppercase tracking-wide text-faint">
+                <Gauge aria-hidden className="size-3.5" /> Elapsed
+              </p>
+              <p className="tabular mt-1 text-[15px] font-medium text-primary">
+                {formatDurationLong(elapsedSec)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-line bg-ink-900/60 px-4 py-3">
+              <p className="flex items-center gap-1.5 text-[11.5px] uppercase tracking-wide text-faint">
+                <Cpu aria-hidden className="size-3.5" /> Est. remaining
+              </p>
+              <p className="tabular mt-1 text-[15px] font-medium text-primary">
+                {etaLabel ?? (completed ? 'Done' : 'Calculating…')}
+              </p>
+              {etaLabel && (
+                <p className="mt-0.5 text-[10.5px] text-faint">
+                  {eta?.basis === 'transcript' ? 'from speech processed' : 'from overall progress'}
+                </p>
+              )}
+            </div>
+            <div className="rounded-lg border border-line bg-ink-900/60 px-4 py-3">
+              <p className="flex items-center gap-1.5 text-[11.5px] uppercase tracking-wide text-faint">
+                <Sparkles aria-hidden className="size-3.5" /> Stages done
+              </p>
+              <p className="tabular mt-1 text-[15px] font-medium text-primary">
+                {stages.filter((stage) => stage.status === 'done').length} / {stages.length}
+              </p>
             </div>
           </div>
 
@@ -109,7 +232,7 @@ export function ProcessingPage() {
             {stages.map((stage) => (
               <li
                 key={stage.key}
-                className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5 transition-colors ${
+                className={`rounded-lg border px-4 py-2.5 transition-colors ${
                   stage.status === 'done'
                     ? 'border-success/25 bg-success/[0.06]'
                     : stage.status === 'active'
@@ -117,31 +240,37 @@ export function ProcessingPage() {
                       : 'border-line bg-ink-900/40'
                 }`}
               >
-                <div className="min-w-0">
-                  <p className="text-[13px] font-medium text-primary">{stage.label}</p>
-                  <p className="mt-0.5 text-[11.5px] text-faint">{stage.description}</p>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-primary">{stage.label}</p>
+                    <p className="mt-0.5 text-[11.5px] text-faint">{stage.description}</p>
+                  </div>
+                  <span className="tabular shrink-0 text-[11.5px] text-faint">
+                    {stage.status === 'done'
+                      ? 'Done'
+                      : stage.status === 'active'
+                        ? `${stage.progress}%`
+                        : 'Queued'}
+                  </span>
                 </div>
-                <span className="tabular shrink-0 text-[11.5px] text-faint">
-                  {stage.status === 'done' ? 'Done' : stage.status === 'active' ? `${stage.progress}%` : 'Queued'}
-                </span>
+                {stage.status === 'active' && (
+                  <div className="mt-2">
+                    <ProgressBar value={stage.progress} />
+                  </div>
+                )}
               </li>
             ))}
           </ol>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border border-line bg-ink-900/60 px-4 py-3">
-              <p className="text-[11.5px] uppercase tracking-wide text-faint">Source length</p>
-              <p className="mt-0.5 text-[15px] font-medium text-primary tabular">
-                {formatClock(project.durationSec)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-line bg-ink-900/60 px-4 py-3">
-              <p className="text-[11.5px] uppercase tracking-wide text-faint">Pipeline stages</p>
-              <p className="mt-0.5 text-[15px] font-medium text-primary tabular">
-                {stages.filter((stage) => stage.status === 'done').length} / {stages.length}
-              </p>
-            </div>
-          </div>
+          <p className="text-center text-[11px] text-faint">
+            {completed
+              ? 'All stages finished.'
+              : stopped
+                ? 'Retry to start again from the first stage.'
+                : isRunning
+                  ? `Live from the server${lastUpdateAgeSec != null ? ` · updated ${lastUpdateAgeSec}s ago` : ''}. ${formatEta(eta?.seconds ?? 0)} remaining.`
+                  : 'Processing is paused while you are away.'}
+          </p>
 
           {completed ? (
             <div className="flex flex-wrap items-center justify-center gap-2">
@@ -178,27 +307,9 @@ export function ProcessingPage() {
                 </Button>
               )}
             </div>
-          ) : (
-            <p className="text-center text-[11px] text-faint">
-              {isRunning
-                ? 'Running on the server. You can leave this page and come back.'
-                : 'Processing is paused while you are away.'}
-            </p>
-          )}
+          ) : null}
         </PanelBody>
       </Panel>
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-

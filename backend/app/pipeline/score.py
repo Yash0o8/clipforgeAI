@@ -565,3 +565,106 @@ def top_candidates(
         face_tracks=face_tracks,
     )
     return shortlist(candidates, settings, count=count)
+
+
+def signal_only_candidates(
+    source_duration: float,
+    settings: Settings,
+    *,
+    min_duration: float | None = None,
+    max_duration: float | None = None,
+    count: int | None = None,
+    audio_spikes: list[dict[str, Any]] | None = None,
+    scene_cuts: list[float] | None = None,
+    face_tracks: list[dict[str, Any]] | None = None,
+) -> list[Candidate]:
+    """Build clip windows from action signals when a video has no speech.
+
+    Gaming/screen-recording clips are often completely silent. Failing those
+    projects is worse than producing a decent silent edit: audio spikes, scene
+    cuts and face tracks still identify exciting moments. When none of those are
+    available, evenly spaced windows are used as a last resort.
+    """
+    source_duration = float(source_duration or 0.0)
+    if source_duration <= 0:
+        return []
+
+    min_duration = min_duration or settings.clip_min_duration
+    max_duration = max_duration or settings.clip_max_duration
+    target = min(max(settings.clip_target_duration, min_duration), max_duration)
+
+    spikes = [s for s in (audio_spikes or []) if isinstance(s, dict)]
+    cuts = [float(c) for c in (scene_cuts or []) if isinstance(c, (int, float))]
+    faces = [t for t in (face_tracks or []) if isinstance(t, dict)]
+
+    anchors: list[tuple[float, float]] = []
+    for spike in spikes:
+        try:
+            anchors.append((float(spike.get("t", 0.0)), 0.5 + min(1.0, float(spike.get("strength", 0.0)))))
+        except (TypeError, ValueError):
+            continue
+    anchors.extend((cut, 0.8) for cut in cuts)
+    for track in faces:
+        try:
+            anchors.append((float(track.get("t", 0.0)), 0.6))
+        except (TypeError, ValueError):
+            continue
+    if not anchors:
+        step = max(target, min_duration)
+        t = step / 2
+        while t + min_duration <= source_duration:
+            anchors.append((t, 0.35))
+            t += step
+
+    candidates: list[Candidate] = []
+    for index, (anchor, anchor_strength) in enumerate(anchors):
+        start = max(0.0, min(source_duration - min_duration, anchor - target / 2))
+        end = min(source_duration, start + target)
+        if end - start < min_duration:
+            continue
+
+        hits = 0
+        strength = 0.0
+        for spike in spikes:
+            try:
+                t = float(spike.get("t", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if start <= t <= end:
+                hits += 1
+                strength += float(spike.get("strength", 0.0) or 0.0)
+        cut_hits = sum(1 for cut in cuts if start <= cut <= end)
+        face_hits = sum(
+            1
+            for track in faces
+            if start <= float(track.get("t", 0.0) or 0.0) <= end
+        )
+        components = {
+            "audio": _clamp01(_squash(hits, 2.0, 1.2) * 0.7 + _squash(strength, 1.5, 0.8) * 0.3),
+            "visual": _clamp01(_squash(cut_hits, 2.0, 1.1)),
+            "face": _clamp01(_squash(face_hits, 3.0, 1.0)),
+        }
+        signal_score = sum(components.values()) / len(components)
+        score = round(_clamp01(0.65 * signal_score + 0.35 * anchor_strength) * 100, 1)
+        title = f"Action moment {index + 1}"
+        hook = "Auto-selected from action and audio spikes"
+        candidates.append(
+            Candidate(
+                start_sec=round(start, 2),
+                end_sec=round(end, 2),
+                text="",
+                segments=[],
+                score=score,
+                components=components,
+                title=title,
+                hook=hook,
+                caption=title,
+                viral_score=int(max(0, min(100, score))),
+                keywords=[],
+                hashtags=["#shorts", "#clipforge"],
+                description=hook,
+            )
+        )
+
+    candidates.sort(key=lambda item: item.score, reverse=True)
+    return shortlist(candidates, settings, count=count)

@@ -60,7 +60,7 @@ def db_session():
     init_engine()
     session = new_session()
     # Order matters: children before parents, or FK constraints complain.
-    for table in ("exports", "clips", "jobs", "projects"):
+    for table in ("exports", "clips", "jobs", "projects", "credit_accounts"):
         session.execute(text(f"DELETE FROM {table}"))
     session.commit()
     try:
@@ -235,7 +235,8 @@ def clip_rows(client, project):
 @pytest.fixture()
 def ready_project(client, project):
     """A project in the ``ready`` state, which exports require."""
-    client.post(f"{API}/projects/{project['id']}/process")  # sets processing
+    # Deliberately no processing job: it would outlive this fixture and replace
+    # the clip rows with its own candidates in a later export test.
     response = client.patch(f"{API}/projects/{project['id']}", json={"status": "ready"})
     assert response.json()["status"] == "ready"
     return response.json()

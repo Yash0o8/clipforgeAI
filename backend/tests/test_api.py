@@ -179,6 +179,8 @@ def test_created_project_has_the_frontend_shape(project):
         "stages",
         "error",
         "wordCount",
+        "processingStartedAt",
+        "transcription",
         "createdAt",
         "updatedAt",
         "objectUrl",

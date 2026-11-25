@@ -23,6 +23,7 @@ export const NAV_ITEMS = [
   { id: 'create', label: 'Create Clips', to: '/app/upload', icon: 'Sparkles' },
   { id: 'clips', label: 'Clips', to: '/app/clips', icon: 'Scissors' },
   { id: 'exports', label: 'Exports', to: '/app/exports', icon: 'Download' },
+  { id: 'billing', label: 'Plans & Credits', to: '/app/billing', icon: 'Crown' },
   { id: 'settings', label: 'Settings', to: '/app/settings', icon: 'Settings' },
 ];
 

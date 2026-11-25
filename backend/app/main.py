@@ -25,6 +25,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .billing import plan_catalog
 from .config import get_settings
 from .db import init_engine, new_session
 from .jobs import get_queue
@@ -115,11 +116,18 @@ def health() -> HealthResponse:
     from .storage import ffmpeg_available
 
     settings = get_settings()
+    # Long-form plan is what matters for hour-long uploads; short clips keep the
+    # accuracy-first model advertised by ``whisperModel``.
+    long_plan = settings.transcription_plan(settings.whisper_long_video_threshold_sec + 1)
     return HealthResponse(
         status="ok",
         version=VERSION,
         ffmpeg=ffmpeg_available(),
         whisperModel=settings.whisper_model,
+        transcriptionProvider=long_plan["provider"],
+        transcriptionModel=long_plan["model"],
+        transcriptionFastMode=bool(long_plan["fastMode"]),
+        longVideoThresholdSec=settings.whisper_long_video_threshold_sec,
         llmProvider=settings.llm_provider(),
         llmProviders=settings.llm_providers(),
         device=resolve_device(settings.whisper_device),
@@ -138,6 +146,7 @@ def meta() -> dict:
     exists to make a divergence obvious instead of invisible.
     """
     settings = get_settings()
+    long_plan = settings.transcription_plan(settings.whisper_long_video_threshold_sec + 1)
     return {
         "version": VERSION,
         "stages": [
@@ -169,6 +178,19 @@ def meta() -> dict:
             "previewFirst": True,
             "demoLimits": settings.enable_demo_limits,
             "allow1080p60Exports": settings.allow_1080p60_exports,
+            "transcription": {
+                "provider": long_plan["provider"],
+                "model": long_plan["model"],
+                "defaultModel": settings.whisper_model,
+                "fastMode": bool(long_plan["fastMode"]),
+                "longVideoThresholdSec": settings.whisper_long_video_threshold_sec,
+            },
+            "plans": plan_catalog(settings),
+            "credits": {
+                "gateEnabled": settings.enable_credit_gate,
+                "referralBonusMinutes": settings.referral_bonus_minutes,
+                "currency": "INR",
+            },
         },
         "clipLimits": {"minDuration": 5, "maxDuration": 90, "defaultDuration": 38},
     }

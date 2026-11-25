@@ -258,14 +258,23 @@ export function ClipPreview({
   timeBase = 0,
   backgroundUrl = null,
   facecamUrl = null,
+  renderMode = null,
+  facecamEnabled = false,
+  facecamBox = null,
+  renderReady = false,
   className = '',
 }) {
   const containerRef = useRef(null);
   const videoRef = useRef(null);
   const { width, height } = useElementSize(containerRef);
   const [muted, setMuted] = useState(false);
+  const [showGuides, setShowGuides] = useState(false);
 
   const aspectValue = clip?.aspectRatio === '1:1' ? 1 : clip?.aspectRatio === '16:9' ? 16 / 9 : 9 / 16;
+  const mode = renderMode ?? clip?.renderMode ?? clip?.export?.renderMode ?? 'default';
+  const isSplit = mode === 'split_screen' && !renderReady;
+  const showFacecam = mode === 'gaming' && facecamEnabled && Boolean(facecamUrl) && !renderReady;
+  const box = facecamBox ?? clip?.facecamBox ?? { x: 0.72, y: 0.04, w: 0.24, h: 0.24 };
 
   // Exact frame box: fit the ratio inside the measured container.
   const frameWidth = width > 0 ? Math.min(width, height * aspectValue) : 0;
@@ -359,7 +368,7 @@ export function ClipPreview({
         >
           {hasSource ? (
             <>
-              {clip?.renderMode === 'split_screen' ? (
+              {isSplit ? (
                 <div className="absolute inset-0 grid grid-rows-2 bg-black">
                   <div className="relative overflow-hidden bg-black">
                     <video
@@ -368,7 +377,7 @@ export function ClipPreview({
                       playsInline
                       preload="metadata"
                       muted={muted}
-                      className="absolute inset-0 size-full cursor-pointer object-contain"
+                      className="absolute inset-0 size-full cursor-pointer object-cover"
                       aria-label={`Preview of ${clip?.title ?? 'clip'}`}
                     />
                   </div>
@@ -393,7 +402,7 @@ export function ClipPreview({
                     className="absolute inset-0 size-full cursor-pointer object-contain"
                     aria-label={`Preview of ${clip?.title ?? 'clip'}`}
                   />
-                  {clip?.renderMode === 'gaming' && facecamUrl ? (
+                  {showFacecam ? (
                     <video
                       src={facecamUrl}
                       muted
@@ -403,10 +412,10 @@ export function ClipPreview({
                       preload="metadata"
                       className="absolute z-10 rounded-md border border-white/20 object-cover shadow-lg"
                       style={{
-                        left: `${(clip?.facecamBox?.x ?? 0.72) * 100}%`,
-                        top: `${(clip?.facecamBox?.y ?? 0.04) * 100}%`,
-                        width: `${(clip?.facecamBox?.w ?? 0.24) * 100}%`,
-                        height: `${(clip?.facecamBox?.h ?? 0.24) * 100}%`,
+                        left: `${box.x * 100}%`,
+                        top: `${box.y * 100}%`,
+                        width: `${box.w * 100}%`,
+                        height: `${box.h * 100}%`,
                       }}
                     />
                   ) : null}
@@ -431,7 +440,7 @@ export function ClipPreview({
             />
           )}
 
-          {showCaptions && frameWidth > 0 && (
+          {showCaptions && frameWidth > 0 && !renderReady && (
             <CaptionOverlay
               clip={clip}
               preset={preset}
@@ -442,20 +451,54 @@ export function ClipPreview({
             />
           )}
 
-          {(clip?.hookBanner || clip?.hook) && (currentTime - (clip?.startSec ?? 0)) <= 3 && (
-            <div className="pointer-events-none absolute inset-x-0 top-[5%] z-20 flex justify-center px-4">
-              <span className="rounded-md border border-white/10 bg-black/60 px-3 py-1.5 text-center text-[11px] font-extrabold tracking-[0.08em] text-white uppercase shadow-[0_4px_18px_rgba(0,0,0,0.5)] backdrop-blur-[1px]">
-                {clip.hookBanner || clip.hook}
-              </span>
+          {/* Safe-area / composition guides, useful for social UI overlays. */}
+          {showGuides && (
+            <div aria-hidden className="pointer-events-none absolute inset-0 z-10">
+              <div className="absolute inset-x-[8%] inset-y-[10%] border border-dashed border-white/25" />
+              <div className="absolute inset-x-[8%] bottom-[20%] border-t border-dashed border-white/20" />
+              <div className="absolute inset-y-0 left-1/3 border-l border-white/10" />
+              <div className="absolute inset-y-0 left-2/3 border-l border-white/10" />
+              {isSplit && (
+                <div className="absolute inset-x-0 top-1/2 border-t-2 border-dashed border-cyan-300/60" />
+              )}
             </div>
           )}
 
+          {(clip?.hookBanner || clip?.hook) &&
+            !renderReady &&
+            (currentTime - (clip?.startSec ?? 0)) >= 0 &&
+            (currentTime - (clip?.startSec ?? 0)) <= 3 && (
+              <div className="pointer-events-none absolute inset-x-0 top-[5%] z-20 flex justify-center px-4">
+                <span className="rounded-md border border-white/10 bg-black/60 px-3 py-1.5 text-center text-[11px] font-extrabold tracking-[0.08em] text-white uppercase shadow-[0_4px_18px_rgba(0,0,0,0.5)] backdrop-blur-[1px]">
+                  {clip.hookBanner || clip.hook}
+                </span>
+              </div>
+            )}
+
+          {/* Source chip: a finished render already has captions baked in. */}
+          <span className="tabular absolute top-2 left-2 z-20 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white/80 backdrop-blur-sm">
+            {renderReady ? 'Rendered' : 'Preview'}
+          </span>
+
           {/* Duration chip, bottom-left. */}
           {clip?.durationSec > 0 && (
-            <span className="tabular absolute bottom-2 left-2 rounded bg-scrim/80 px-1.5 py-0.5 text-[10.5px] font-medium text-white backdrop-blur-sm">
+            <span className="tabular absolute bottom-2 left-2 z-20 rounded bg-scrim/80 px-1.5 py-0.5 text-[10.5px] font-medium text-white backdrop-blur-sm">
               {formatClock(clip.durationSec)}
             </span>
           )}
+
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setShowGuides((value) => !value);
+            }}
+            aria-label={showGuides ? 'Hide composition guides' : 'Show composition guides'}
+            title={showGuides ? 'Hide guides' : 'Guides'}
+            className="absolute top-2 right-2 z-30 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white/80 hover:bg-black/70"
+          >
+            {showGuides ? 'Guides on' : 'Guides'}
+          </button>
 
           {hasSource && (
             <button

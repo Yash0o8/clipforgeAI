@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
+  Crown,
   Download,
   FolderClosed,
   LayoutDashboard,
@@ -20,6 +21,7 @@ const ICONS = {
   Scissors,
   Download,
   Settings,
+  Crown,
 };
 
 /**

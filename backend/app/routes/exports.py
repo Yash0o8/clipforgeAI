@@ -118,12 +118,28 @@ def start_export(
         if not payload.preview:
             payload.watermark = True
 
+    # A device id opts into per-plan entitlements. Requests without one keep the
+    # previous server-wide behaviour so existing clients are unaffected.
+    plan_entitlements = None
+    if payload.deviceId:
+        from ..billing import entitlements_for, get_or_create_account
+
+        account = get_or_create_account(session, payload.deviceId, settings)
+        plan_entitlements = entitlements_for(account.plan, settings)
+        if not payload.preview and plan_entitlements["watermarkRequired"]:
+            payload.watermark = True
+
     requested_frame_rate = int(payload.frameRate) if payload.frameRate else 30
     hd_resolutions = {"1080x1920", "1080x1080", "1920x1080"}
-    if requested_frame_rate >= 60 and payload.resolution in hd_resolutions and not settings.allow_1080p60_exports:
+    hd60_allowed = (
+        plan_entitlements["allow1080p60"]
+        if plan_entitlements is not None
+        else settings.allow_1080p60_exports
+    )
+    if requested_frame_rate >= 60 and payload.resolution in hd_resolutions and not hd60_allowed:
         raise HTTPException(
             status_code=402,
-            detail="1080p60 exports are available on paid plans. Export at 30fps or enable ALLOW_1080P60_EXPORTS for entitled users.",
+            detail="1080p60 exports are available on paid plans. Export at 30fps or upgrade to Pro.",
         )
 
     queue = get_queue_or_503()

@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -64,6 +65,27 @@ class Settings(BaseSettings):
     whisper_language: str | None = None
     whisper_initial_prompt: str | None = None
     transcription_hint: str | None = None  # e.g. hinglish_roman
+
+    # Long-form speed controls. A 100-minute CPU transcription is dominated by
+    # this stage, so long sources switch to a cheaper preset automatically.
+    # Short clips keep the accuracy-first defaults above.
+    whisper_fast_model: str = "base"
+    whisper_long_video_threshold_sec: float = 3600.0
+    whisper_beam_size: int = 5
+    whisper_fast_beam_size: int = 1
+    whisper_condition_on_previous_text: bool = True
+    # A cached model is loaded without contacting HuggingFace at all. This is
+    # the difference between a 2-second load and a 10-second timeout that used
+    # to fail whole jobs on flaky networks.
+    whisper_local_files_only: bool = True
+    # Comma-separated fallback order when the requested model is unavailable.
+    whisper_model_fallbacks: str = "small,base,tiny"
+    # "auto" uses Groq only for long/fast runs when a key is present, and falls
+    # back to the local model for everything else. "local" never calls out.
+    transcription_provider: str = "auto"  # auto | local | groq
+    groq_transcribe_model: str = "whisper-large-v3-turbo"
+    groq_chunk_sec: int = 600
+    transcript_cache_enabled: bool = True
 
     # --- Highlight pipeline ----------------------------------------------
 
@@ -122,6 +144,19 @@ class Settings(BaseSettings):
     free_watermark_text: str = "ClipForge Free"
     allow_1080p60_exports: bool = False  # paid/entitled tier gate; false keeps 60fps HD as upgrade path
 
+    # --- Credits / plans --------------------------------------------------
+    # Credit accounting is always available through /billing. Enforcement at
+    # job submission is opt-in so existing local installs keep working until a
+    # deployment explicitly turns the freemium gate on.
+    enable_credit_gate: bool = False
+    free_monthly_minutes: int = 30
+    creator_monthly_minutes: int = 300
+    pro_monthly_minutes: int = 1200
+    referral_bonus_minutes: int = 15
+    stripe_secret_key: str | None = None
+    stripe_creator_price_id: str | None = None
+    stripe_pro_price_id: str | None = None
+
     # --- ffmpeg -----------------------------------------------------------
 
     ffmpeg_binary: str = "ffmpeg"
@@ -141,6 +176,49 @@ class Settings(BaseSettings):
     @property
     def vault_dir(self) -> Path:
         return self.gameplay_vault_dir or (self.data_dir / "vault")
+
+    @property
+    def transcript_cache_dir(self) -> Path:
+        return self.data_dir / "transcripts"
+
+    def transcription_plan(self, duration_sec: float, quality: str | None = None) -> dict[str, Any]:
+        """Effective transcription settings for a source of ``duration_sec``.
+
+        ``quality`` is an optional project-level override: ``fast`` forces the
+        cheap preset, ``accuracy`` forces the accuracy preset, anything else
+        (including ``None``) selects automatically by duration.
+
+        The result is deliberately JSON-shaped so it can be returned by the API
+        and shown in the UI: the user should know whether they are waiting on a
+        local CPU model or a hosted provider.
+        """
+        requested = (quality or "auto").strip().lower()
+        long_form = float(duration_sec or 0) > self.whisper_long_video_threshold_sec
+        if requested == "accuracy":
+            fast = False
+        elif requested == "fast":
+            fast = True
+        else:
+            fast = long_form
+
+        provider = (self.transcription_provider or "auto").strip().lower()
+        if provider not in {"auto", "local", "groq"}:
+            provider = "auto"
+        if provider == "auto":
+            provider = "groq" if fast and bool(self.groq_api_key) else "local"
+
+        return {
+            "model": self.whisper_fast_model if fast else self.whisper_model,
+            "beamSize": self.whisper_fast_beam_size if fast else self.whisper_beam_size,
+            "conditionOnPreviousText": (
+                False if fast else self.whisper_condition_on_previous_text
+            ),
+            "provider": provider,
+            "chunkSec": max(60, int(self.groq_chunk_sec)),
+            "fastMode": fast,
+            "longForm": long_form,
+            "quality": requested or "auto",
+        }
 
     @property
     def database_url(self) -> str:

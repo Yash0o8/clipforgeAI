@@ -329,7 +329,7 @@ def _keyword_set(keywords: list[str] | None) -> set[str]:
     return {_norm_token(k) for k in (keywords or []) if _norm_token(k)}
 
 
-def _highlight_keywords(text: str, keywords: list[str] | None, highlight_color: str) -> str:
+def _highlight_keywords(text: str, keywords: list[str] | None, highlight_color: str, base_color: str) -> str:
     keys = _keyword_set(keywords)
     if not keys:
         return escape_text(text)
@@ -340,7 +340,7 @@ def _highlight_keywords(text: str, keywords: list[str] | None, highlight_color: 
             out.append(part)
             continue
         if _norm_token(part) in keys:
-            out.append(f"{{\\c{highlight_color}}}{escape_text(part)}{{\\c&HFFFFFF&}}")
+            out.append(f"{{\\c{highlight_color}\\b1}}{escape_text(part)}{{\\c{base_color}\\b0}}")
         else:
             out.append(escape_text(part))
     return "".join(out)
@@ -371,9 +371,11 @@ def _ass_text(
     font = f"{{\\fn{style.font_name}\\fs{style.font_size}\\b{style.bold}}}"
 
     if not cue.karaoke:
-        anim = r"{\fscx92\fscy92\t(0,90,\fscx100\fscy100)}" if style.preset_id == "hormozi" else ""
+        anim = r"{\fscx92\fscy92\t(0,90,\fscx104\fscy104)\t(90,180,\fscx100\fscy100)}" if style.preset_id == "hormozi" else ""
         if keyword_highlight:
-            return f"{font}{anim}{{\\c{style.primary}}}" + _highlight_keywords(cue.text.upper() if style.uppercase else cue.text, keywords, style.secondary)
+            return f"{font}{anim}{{\\c{style.primary}}}" + _highlight_keywords(
+                cue.text.upper() if style.uppercase else cue.text, keywords, style.secondary, style.primary
+            )
         return f"{font}{anim}{{\\c{style.primary}}}{escaped}"
 
     # Per-word \k tags. Each word's duration is taken from its real timing when
@@ -398,15 +400,22 @@ def _ass_text(
     if len(raw_words) != len(tokens):
         raw_words = [t for t in tokens]
 
-    keys = _keyword_set(keywords) if keyword_highlight else set()
-    parts = []
-    for index, token in enumerate(tokens):
-        raw = raw_words[index] if index < len(raw_words) else token
-        if keys and _norm_token(raw) in keys:
-            parts.append(f"{{\\c{style.secondary}}}{{\\k{centis[index]}}}{token}{{\\c{style.secondary}}}")
+    keyset = _keyword_set(keywords) if keyword_highlight else set()
+    parts: list[str] = []
+    for i, (duration, token, raw) in enumerate(zip(centis, tokens, raw_words)):
+        is_key = bool(keyset and _norm_token(raw) in keyset)
+        pop = ""
+        if style.preset_id == "hormozi":
+            pop = r"{\fscx108\fscy108\t(0,80,\fscx100\fscy100)}"
+        if is_key:
+            parts.append(
+                f"{{\\1c{style.secondary}\\3c&H000000&\\bord3\\b1}}{pop}{token}{{\\r}}{{\\k{duration}}}"
+            )
         else:
-            parts.append(f"{{\\k{centis[index]}}}{token}")
-    return f"{font}{{\\c{style.secondary}}}{' '.join(parts)}"
+            parts.append(f"{pop}{token}{{\\k{duration}}}")
+    body = " ".join(parts)
+    lead = r"{\fscx100\fscy100}" if style.preset_id == "hormozi" else ""
+    return f"{font}{lead}{{\\c{style.primary}}}{body}"
 
 
 def build_ass(

@@ -36,6 +36,7 @@ export function ExportSettings({
   canExport = true,
   vaultItems = [],
   capabilities = null,
+  watermarkRequired = false,
   className = '',
 }) {
   // The aspect ratio lives on the clip, not the render settings, so one preview
@@ -46,6 +47,10 @@ export function ExportSettings({
   const height = resolution ? Number(resolution.id.split('x')[1]) : aspect.height;
   const allow1080p60 = Boolean(capabilities?.features?.allow1080p60Exports ?? capabilities?.allow1080p60Exports);
   const demoLimits = Boolean(capabilities?.features?.demoLimits ?? capabilities?.demoLimits);
+  const selectedVaultId = settings.renderMode === 'split_screen'
+    ? settings.backgroundAssetId
+    : settings.facecamAssetId;
+  const selectedVaultItem = vaultItems.find((item) => item.id === selectedVaultId);
 
   const estimated = estimateSize({ durationSec: clip?.durationSec ?? 0, width, height });
 
@@ -141,6 +146,15 @@ export function ExportSettings({
                 ...vaultItems.map((item) => ({ value: item.id, label: item.title || item.id })),
               ]}
             />
+            {clip?.meta?.facecamBoxSuggestion && (
+              <Button
+                size="xs"
+                variant="secondary"
+                onClick={() => onChange({ facecamBox: { ...clip.meta.facecamBoxSuggestion } })}
+              >
+                Use auto-detected facecam placement
+              </Button>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
               {[
                 ['x', 'Facecam X'],
@@ -164,8 +178,18 @@ export function ExportSettings({
                 </label>
               ))}
             </div>
-            <p className="text-[11px] text-faint">Manual PiP override. Auto-extraction is best-effort; use this to place/size facecam.</p>
+            <p className="text-[11px] text-faint">
+              Manual PiP override. {clip?.meta?.facecamBoxSuggestion ? 'Auto-detected placement is available from face tracks.' : 'Auto-extraction is best-effort when face tracks are available.'}
+            </p>
           </div>
+        )}
+
+        {selectedVaultItem && (
+          <p className="text-[11px] leading-relaxed text-faint">
+            Using <span className="text-secondary">{selectedVaultItem.title || selectedVaultItem.id}</span>
+            {' · '}{selectedVaultItem.license || 'Licence not specified'}
+            {selectedVaultItem.source ? ` · ${selectedVaultItem.source}` : ''}
+          </p>
         )}
 
         <Toggle
@@ -186,10 +210,20 @@ export function ExportSettings({
           />
           <Toggle
             id="watermark"
-            checked={Boolean(settings.watermark || (demoLimits && !settings.preview))}
-            onChange={(value) => onChange({ watermark: demoLimits && !settings.preview ? true : value })}
+            checked={Boolean(settings.watermark || (demoLimits && !settings.preview) || (watermarkRequired && !settings.preview))}
+            onChange={(value) =>
+              onChange({
+                watermark: demoLimits && !settings.preview ? true : watermarkRequired && !settings.preview ? true : value,
+              })
+            }
             label="Free watermark"
-            description={demoLimits ? 'Demo/free tier enforces watermark on HD exports.' : 'Add ClipForge watermark for demo/free tier.'}
+            description={
+              watermarkRequired
+                ? 'Included on the free plan. Upgrade to remove it — the server enforces this too.'
+                : demoLimits
+                  ? 'Demo/free tier enforces watermark on HD exports.'
+                  : 'Add ClipForge watermark for demo/free tier.'
+            }
           />
           <Toggle
             id="auto-zoom"

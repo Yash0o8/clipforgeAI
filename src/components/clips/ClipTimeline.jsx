@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CLIP_LIMITS } from '../../utils/constants.js';
 import { formatClock } from '../../utils/formatDuration.js';
 
-/** Convert a client X position into seconds within the source timeline. */
-function positionToSeconds(clientX, rect, sourceDuration) {
-  const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-  return ratio * sourceDuration;
+/** Zoom levels: 1 = whole source, higher = tighter view around the playhead. */
+const ZOOM_LEVELS = [1, 2, 4, 8, 16];
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
 /**
@@ -13,7 +14,9 @@ function positionToSeconds(clientX, rect, sourceDuration) {
  *
  * Pointer drag and keyboard (arrows / Home / End) both work, because a
  * frame-accurate trim is unusable with a mouse alone. Each handle is a
- * `role="slider"` with its own accessible value.
+ * `role="slider"` with its own accessible value. Zoom keeps the playhead in
+ * view without changing the underlying clip times, and optional snapping pulls
+ * a handle to an analysis marker (spike/cut/SFX) for a meaningful trim point.
  */
 export function ClipTimeline({
   startSec,
@@ -23,14 +26,55 @@ export function ClipTimeline({
   onChange,
   onScrub,
   markers = [],
+  snapToMarkers = false,
   className = '',
 }) {
   const trackRef = useRef(null);
   const [dragging, setDragging] = useState(null);
+  const [zoomIndex, setZoomIndex] = useState(0);
+
+  const zoom = ZOOM_LEVELS[zoomIndex];
+  const viewSpan = sourceDuration > 0 ? sourceDuration / zoom : 1;
+  const viewStart = useMemo(() => {
+    if (sourceDuration <= 0) return 0;
+    if (zoom === 1) return 0;
+    const half = viewSpan / 2;
+    return clamp((playheadSec ?? startSec) - half, 0, Math.max(0, sourceDuration - viewSpan));
+  }, [zoom, viewSpan, sourceDuration, playheadSec, startSec]);
+  const viewEnd = viewStart + viewSpan;
 
   const toPercent = useCallback(
-    (seconds) => (sourceDuration > 0 ? (seconds / sourceDuration) * 100 : 0),
-    [sourceDuration]
+    (seconds) => (viewSpan > 0 ? ((seconds - viewStart) / viewSpan) * 100 : 0),
+    [viewSpan, viewStart]
+  );
+
+  /** Map a client X position into the visible time window. */
+  const positionToSeconds = useCallback(
+    (clientX, rect) => {
+      const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+      return viewStart + ratio * viewSpan;
+    },
+    [viewStart, viewSpan]
+  );
+
+  /** Pull a value to a nearby marker when snapping is enabled. */
+  const snap = useCallback(
+    (seconds) => {
+      if (!snapToMarkers || !markers.length) return seconds;
+      let best = seconds;
+      let bestDistance = viewSpan * 0.012; // ~1.2% of the visible window
+      for (const marker of markers) {
+        const t = Number(marker?.t);
+        if (!Number.isFinite(t)) continue;
+        const distance = Math.abs(t - seconds);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = t;
+        }
+      }
+      return best;
+    },
+    [markers, snapToMarkers, viewSpan]
   );
 
   /* --- Pointer dragging ------------------------------------------------- */
@@ -51,7 +95,7 @@ export function ClipTimeline({
     const onPointerMove = (event) => {
       const rect = trackRef.current?.getBoundingClientRect();
       if (!rect) return;
-      onChange(dragging, positionToSeconds(event.clientX, rect, sourceDuration));
+      onChange(dragging, snap(positionToSeconds(event.clientX, rect)));
     };
 
     const onPointerUp = () => setDragging(null);
@@ -64,16 +108,16 @@ export function ClipTimeline({
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
     };
-  }, [dragging, onChange, sourceDuration]);
+  }, [dragging, onChange, positionToSeconds, snap]);
 
   /** Scrub the playhead when the empty part of the track is clicked. */
   const onTrackPointerDown = useCallback(
     (event) => {
       const rect = trackRef.current?.getBoundingClientRect();
       if (!rect) return;
-      onScrub?.(positionToSeconds(event.clientX, rect, sourceDuration));
+      onScrub?.(positionToSeconds(event.clientX, rect));
     },
-    [onScrub, sourceDuration]
+    [onScrub, positionToSeconds]
   );
 
   /* --- Keyboard --------------------------------------------------------- */
@@ -111,9 +155,9 @@ export function ClipTimeline({
       }
 
       event.preventDefault();
-      onChange(edge, next);
+      onChange(edge, snap(clamp(next, 0, sourceDuration)));
     },
-    [endSec, onChange, sourceDuration, startSec]
+    [endSec, onChange, sourceDuration, startSec, snap]
   );
 
   const duration = endSec - startSec;
@@ -122,25 +166,53 @@ export function ClipTimeline({
 
   return (
     <div className={className}>
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <p className="tabular text-[11.5px] text-faint">
           Trim window{' '}
           <span className="font-medium text-secondary">
             {formatClock(startSec)} – {formatClock(endSec)}
           </span>
         </p>
-        <p className="tabular text-[11.5px] text-faint">
-          <span className="font-medium text-secondary">{formatClock(duration)}</span> of{' '}
-          {formatClock(sourceDuration)}
-        </p>
+        <div className="flex items-center gap-1.5">
+          <span className="tabular text-[11.5px] text-faint">
+            <span className="font-medium text-secondary">{formatClock(duration)}</span> of{' '}
+            {formatClock(sourceDuration)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
+            disabled={zoomIndex === 0}
+            aria-label="Zoom out timeline"
+            className="rounded border border-line px-1.5 text-[11px] text-secondary hover:text-primary disabled:opacity-40"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={() => setZoomIndex(0)}
+            aria-label="Fit whole video"
+            className="rounded border border-line px-1.5 text-[11px] text-secondary hover:text-primary"
+          >
+            Fit
+          </button>
+          <button
+            type="button"
+            onClick={() => setZoomIndex((i) => Math.min(ZOOM_LEVELS.length - 1, i + 1))}
+            disabled={zoomIndex === ZOOM_LEVELS.length - 1}
+            aria-label="Zoom in timeline"
+            className="rounded border border-line px-1.5 text-[11px] text-secondary hover:text-primary disabled:opacity-40"
+          >
+            +
+          </button>
+        </div>
       </div>
 
       <div
         ref={trackRef}
         onPointerDown={onTrackPointerDown}
-        className="group relative h-11 cursor-pointer touch-none select-none rounded-md bg-ink-925"
+        className="group relative h-12 cursor-pointer touch-none select-none rounded-md bg-ink-925"
       >
-        {/* Ruler ticks */}
+        {/* Ruler ticks, labelled at the visible window's start/end */}
         <div aria-hidden className="absolute inset-0 flex justify-between px-0">
           {Array.from({ length: 11 }, (_, index) => (
             <span
@@ -149,11 +221,23 @@ export function ClipTimeline({
             />
           ))}
         </div>
+        <span
+          aria-hidden
+          className="tabular pointer-events-none absolute bottom-0 left-1 text-[9px] text-faint"
+        >
+          {formatClock(viewStart)}
+        </span>
+        <span
+          aria-hidden
+          className="tabular pointer-events-none absolute right-1 bottom-0 text-[9px] text-faint"
+        >
+          {formatClock(viewEnd)}
+        </span>
 
         {/* Analysis markers: spikes/cuts/dead-air help users see attractive areas */}
         {markers.map((m, i) => {
           const t = Number(m.t);
-          if (!Number.isFinite(t) || t < 0 || t > sourceDuration) return null;
+          if (!Number.isFinite(t) || t < viewStart - viewSpan || t > viewEnd + viewSpan) return null;
           const color =
             m.type === 'spike' ? 'bg-amber-400/80' :
             m.type === 'scene' ? 'bg-cyan-400/70' :
@@ -178,7 +262,7 @@ export function ClipTimeline({
         />
 
         {/* Playhead */}
-        {playheadSec != null && playheadSec >= startSec && playheadSec <= endSec && (
+        {playheadSec != null && playheadSec >= viewStart && playheadSec <= viewEnd && (
           <div
             aria-hidden
             className="pointer-events-none absolute inset-y-0 w-px bg-brand-300"
@@ -188,6 +272,7 @@ export function ClipTimeline({
 
         {['start', 'end'].map((edge) => {
           const value = edge === 'start' ? startSec : endSec;
+          if (value < viewStart - viewSpan || value > viewEnd + viewSpan) return null;
           return (
             <button
               key={edge}
@@ -215,7 +300,8 @@ export function ClipTimeline({
       </div>
 
       <p className="mt-2 text-[11px] text-faint">
-        Drag the handles or focus them and use arrow keys. Hold Shift for 5-second steps.
+        Drag the handles or focus them and use arrow keys. Hold Shift for 5-second steps. Zoom
+        keeps the playhead in view.
       </p>
     </div>
   );

@@ -11,6 +11,7 @@ import { ClipsPage } from './pages/Clips.jsx';
 import { ClipEditorPage } from './pages/ClipEditorPage.jsx';
 import { ExportsPage } from './pages/Exports.jsx';
 import { SettingsPage } from './pages/Settings.jsx';
+import { BillingPage } from './pages/Billing.jsx';
 import { NotFoundPage } from './pages/NotFound.jsx';
 import { useApp } from './hooks/useApp.js';
 
@@ -56,12 +57,14 @@ function AppRoutes() {
           <Route path="/app/overview" element={<OverviewPage />} />
           <Route path="/app/projects" element={<ProjectsPage />} />
           <Route path="/app/projects/:id" element={<ProjectPage />} />
+          <Route path="/app/projects/:projectId/processing" element={<ProcessingPage />} />
           <Route path="/app/upload" element={<UploadPage />} />
           <Route path="/app/upload/processing/:projectId" element={<ProcessingPage />} />
           <Route path="/app/clips" element={<ClipsPage />} />
           <Route path="/app/clips/:clipId/editor" element={<ClipEditorPage />} />
           <Route path="/app/exports" element={<ExportsPage />} />
           <Route path="/app/settings" element={<SettingsPage />} />
+          <Route path="/app/billing" element={<BillingPage />} />
           <Route path="/app" element={<Navigate to="/app/overview" replace />} />
         </Route>
 

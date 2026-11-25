@@ -4,6 +4,7 @@ import {
   NOTIFICATION_TONE,
   PROJECT_STATUS,
   PROCESSING_STAGES,
+  STAGE_KEYS,
 } from '../utils/constants.js';
 import * as projectService from '../services/projectService.js';
 import { sleep } from '../services/api.js';
@@ -24,6 +25,13 @@ const FALLBACK_WEIGHT = (() => {
 /** Statuses that mean the pipeline has stopped moving. */
 const TERMINAL = new Set([PROJECT_STATUS.READY, PROJECT_STATUS.FAILED, PROJECT_STATUS.CANCELLED]);
 
+/** Parse an ISO timestamp without throwing on a missing/odd value. */
+function parseTime(value) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /**
  * Drives the real transcription + highlight pipeline.
  *
@@ -33,8 +41,9 @@ const TERMINAL = new Set([PROJECT_STATUS.READY, PROJECT_STATUS.FAILED, PROJECT_S
  * contract (`progress` 0-100 plus the five `stages`), so what the user sees
  * during a long transcription is the actual state rather than an animation.
  *
- * Polling stops on unmount and whenever the job reaches a terminal state, and
- * `cancel` asks the worker to stop rather than merely hiding the progress bar.
+ * Transcription sub-progress is persisted by the worker into the project row,
+ * which is why this hook can show "43 / 103 min processed" instead of freezing
+ * at the stage boundary for an hour.
  */
 export function useProcessing(projectId) {
   const { projects, replaceProject, loadClips, refreshProjects, notify } = useApp();
@@ -52,6 +61,7 @@ export function useProcessing(projectId) {
   // Set while a poll loop owns the network conversation, so cancel can stop it.
   const abortRef = useRef(null);
   const startedAtRef = useRef(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
 
   /** Stop any running poll loop and mark the hook idle. */
   const stopPolling = useCallback(() => {
@@ -106,6 +116,8 @@ export function useProcessing(projectId) {
     [stages]
   );
 
+  const currentStageKey = stages[stageIndex]?.key ?? STAGE_KEYS.UPLOAD;
+
   /* --- Poll loop ------------------------------------------------------ */
 
   const poll = useCallback(async () => {
@@ -129,8 +141,12 @@ export function useProcessing(projectId) {
         replaceProject(fresh);
 
         setProgress(Number(fresh.progress ?? 0));
-        if (startedAtRef.current) {
-          setElapsedSec(Math.max(0, Math.round((Date.now() - startedAtRef.current) / 1000)));
+        setLastUpdatedAt(fresh.updatedAt ?? null);
+        // The worker owns the clock. Using its start time keeps elapsed/ETA
+        // correct even when the user reloads this page mid-transcription.
+        const serverStart = parseTime(fresh.processingStartedAt) ?? startedAtRef.current;
+        if (serverStart) {
+          setElapsedSec(Math.max(0, Math.round((Date.now() - serverStart) / 1000)));
         }
 
         if (fresh.status === PROJECT_STATUS.READY) {
@@ -183,6 +199,7 @@ export function useProcessing(projectId) {
     setError(null);
     setProgress(0);
     setElapsedSec(0);
+    setLastUpdatedAt(null);
     startedAtRef.current = Date.now();
 
     try {
@@ -225,19 +242,52 @@ export function useProcessing(projectId) {
   }, [start]);
 
   const status = project?.status ?? PROJECT_STATUS.DRAFT;
+  const transcription = project?.transcription ?? {};
+  const transcriptProgress = Math.min(100, Math.max(0, Number(transcription.progress ?? 0)));
+  const processedSec = Math.max(0, Number(transcription.processedSec ?? 0));
+  const sourceDurationSec = Math.max(0, Number(project?.durationSec ?? 0));
+  const transcriptActive = status === PROJECT_STATUS.PROCESSING && currentStageKey === STAGE_KEYS.TRANSCRIPT;
 
   /**
-   * Remaining time, estimated from the rate observed so far.
+   * Remaining time, estimated for the stage that is actually running.
    *
-   * Before any progress lands there is nothing to extrapolate from, so the
-   * estimate is null rather than a fabricated number.
+   * Transcription is measured in *media seconds processed*, not overall job
+   * percent — using overall progress would produce a wildly optimistic ETA
+   * because upload and audio finish almost instantly. A range is shown rather
+   * than a single number because CPU speed varies.
    */
-  const etaSec = useMemo(() => {
-    if (!isRunning || progress <= 0 || elapsedSec <= 0) return null;
+  const eta = useMemo(() => {
+    if (!isRunning || elapsedSec <= 0 || status !== PROJECT_STATUS.PROCESSING) return null;
+
+    if (transcriptActive && processedSec > 1 && sourceDurationSec > processedSec) {
+      const rate = processedSec / elapsedSec;
+      if (rate <= 0) return null;
+      const remaining = (sourceDurationSec - processedSec) / rate;
+      return {
+        seconds: Math.round(remaining),
+        lowSec: Math.round(remaining * 0.8),
+        highSec: Math.round(remaining * 1.35),
+        basis: 'transcript',
+      };
+    }
+
+    if (progress <= 0) return null;
     const ratePerSec = progress / elapsedSec;
     if (ratePerSec <= 0) return null;
-    return Math.max(0, Math.round((100 - progress) / ratePerSec));
-  }, [isRunning, progress, elapsedSec]);
+    const remaining = (100 - progress) / ratePerSec;
+    return {
+      seconds: Math.round(remaining),
+      lowSec: Math.round(remaining * 0.8),
+      highSec: Math.round(remaining * 1.35),
+      basis: 'overall',
+    };
+  }, [isRunning, elapsedSec, progress, status, transcriptActive, processedSec, sourceDurationSec]);
+
+  const lastUpdateAgeSec = useMemo(() => {
+    const updated = parseTime(lastUpdatedAt ?? project?.updatedAt);
+    if (!updated) return null;
+    return Math.max(0, Math.round((Date.now() - updated) / 1000));
+  }, [lastUpdatedAt, project?.updatedAt]);
 
   /* --- Resume a job that was already running when the page loaded ------ */
 
@@ -260,8 +310,17 @@ export function useProcessing(projectId) {
     currentStage: PROCESSING_STAGES[stageIndex],
     error,
     elapsedSec,
-    etaSec,
+    etaSec: eta?.seconds ?? null,
+    eta,
     isRunning,
+    transcription: {
+      ...transcription,
+      progress: transcriptProgress,
+      processedSec,
+      active: transcriptActive,
+    },
+    sourceDurationSec,
+    lastUpdateAgeSec,
     /** Marked processing but not currently polling — needs a resume. */
     needsResume: status === PROJECT_STATUS.PROCESSING && !isRunning,
     canRetry: status === PROJECT_STATUS.FAILED || status === PROJECT_STATUS.CANCELLED,

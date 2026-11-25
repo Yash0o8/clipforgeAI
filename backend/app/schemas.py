@@ -138,6 +138,12 @@ class ProjectCreate(CamelModel):
         return cleaned
 
 
+class ProcessRequest(CamelModel):
+    """Optional freemium identity sent with a processing request."""
+
+    deviceId: str | None = Field(default=None, max_length=120)
+
+
 class ProjectPatch(CamelModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     status: ProjectStatus | None = None
@@ -187,6 +193,9 @@ class ExportRequest(CamelModel):
     facecamAssetId: str | None = None
     facecamBox: dict[str, float] | None = None
     watermark: bool = False
+    # Optional freemium identity. When present, plan entitlements decide the
+    # watermark and 1080p60 gates; without it the server-wide flags apply.
+    deviceId: str | None = Field(default=None, max_length=120)
     keywordHighlight: bool | None = None
     highlightColor: str | None = Field(default=None, max_length=32)
     captionOnly: bool = False
@@ -233,6 +242,10 @@ class HealthResponse(BaseModel):
     youtubeIngest: bool = True
     demoLimits: bool = False
     allow1080p60Exports: bool = False
+    transcriptionProvider: str = "local"
+    transcriptionModel: str | None = None
+    transcriptionFastMode: bool = False
+    longVideoThresholdSec: float = 3600.0
 
 
 class DownloadResponse(BaseModel):
